@@ -3490,6 +3490,77 @@ class TestClientSession:
         assert created["n"] == 1
 
 
+class TestConfigurableApiBase:
+    """TELEGRAM_API_BASE_URL overrides the Bot API host for proxy setups.
+
+    Unset keeps today's public host; set routes method calls and file
+    downloads through the configured origin.
+    """
+
+    def test_file_base_defaults_to_public_host(self) -> None:
+        import kiro_crew.telegram.client as client_mod
+
+        # With the public method template, the derived download origin is the
+        # public host (scheme + host only, no path).
+        with patch.object(
+            client_mod,
+            "_API_BASE",
+            "https://api.telegram.org/bot{token}/{method}",
+        ):
+            assert client_mod._file_base() == "https://api.telegram.org"
+
+    def test_file_base_derives_proxy_origin(self) -> None:
+        import kiro_crew.telegram.client as client_mod
+
+        # A configured proxy template yields that proxy's origin, so
+        # /file/bot<token>/<path> downloads traverse the same proxy.
+        with patch.object(
+            client_mod,
+            "_API_BASE",
+            "https://tg-proxy.example.com/bot{token}/{method}",
+        ):
+            assert client_mod._file_base() == "https://tg-proxy.example.com"
+
+    def test_file_base_falls_back_when_unparseable(self) -> None:
+        import kiro_crew.telegram.client as client_mod
+
+        # A value with no http(s) origin falls back to the public host rather
+        # than raising, so a misconfigured var never breaks downloads.
+        with patch.object(client_mod, "_API_BASE", "not-a-url"):
+            assert client_mod._file_base() == "https://api.telegram.org"
+
+    def test_env_var_sets_api_base_at_import(self, monkeypatch: Any) -> None:
+        import importlib
+
+        import kiro_crew.telegram.client as client_mod
+
+        monkeypatch.setenv(
+            "TELEGRAM_API_BASE_URL",
+            "https://tg-proxy.example.com/bot{token}/{method}",
+        )
+        try:
+            reloaded = importlib.reload(client_mod)
+            assert reloaded._API_BASE == ("https://tg-proxy.example.com/bot{token}/{method}")
+            assert reloaded._file_base() == "https://tg-proxy.example.com"
+            url = reloaded._API_BASE.format(token="T", method="getMe")
+            assert url == "https://tg-proxy.example.com/botT/getMe"
+        finally:
+            # Restore the module to the ambient (unset) state so later tests
+            # that import the module global see today's public host.
+            monkeypatch.delenv("TELEGRAM_API_BASE_URL", raising=False)
+            importlib.reload(client_mod)
+
+    def test_unset_keeps_public_host(self, monkeypatch: Any) -> None:
+        import importlib
+
+        import kiro_crew.telegram.client as client_mod
+
+        monkeypatch.delenv("TELEGRAM_API_BASE_URL", raising=False)
+        reloaded = importlib.reload(client_mod)
+        assert reloaded._API_BASE == ("https://api.telegram.org/bot{token}/{method}")
+        assert reloaded._file_base() == "https://api.telegram.org"
+
+
 class TestTelegramTokenRedaction:
     """#1 — a Telegram bot token echoed in output must be scrubbed."""
 
