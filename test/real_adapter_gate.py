@@ -98,6 +98,28 @@ MEASURED_CODEX_ACP_VERSION = pinned_version(CODEX_ACP_PACKAGE)
 #: ``test_opencode_session_mcp.py`` were taken against.
 MEASURED_OPENCODE_VERSION = pinned_version(OPENCODE_PACKAGE)
 
+#: goose's pin. It is a native binary from GitHub releases, not an npm package, so
+#: it has its own small lock: exact version, release asset, and that asset's sha256.
+GOOSE_PIN = MANIFEST_DIR / "goose.json"
+
+
+def goose_pin() -> dict[str, str]:
+    """The goose pin, refused unless the version is exact and the hash is a sha256."""
+    pin = json.loads(GOOSE_PIN.read_text(encoding="utf-8"))
+    version = str(pin["version"])
+    parts = version.split(".")
+    if len(parts) != 3 or not all(part.isdigit() for part in parts):
+        raise ValueError(f"{GOOSE_PIN}: goose is pinned to {version!r}, not an exact release")
+    digest = str(pin["sha256"])
+    if len(digest) != 64 or any(c not in "0123456789abcdef" for c in digest):
+        raise ValueError(f"{GOOSE_PIN}: sha256 {digest!r} is not a lower-case sha256 digest")
+    return {k: str(pin[k]) for k in ("version", "repository", "asset", "sha256")}
+
+
+#: The goose release the live measurements in ``test_per_tool_mcp_deny_single_binary.py``
+#: were taken against.
+MEASURED_GOOSE_VERSION = goose_pin()["version"]
+
 
 def real_adapters_required() -> bool:
     """Whether an absent adapter must fail rather than skip."""

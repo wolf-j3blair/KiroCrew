@@ -1,0 +1,7 @@
+{
+  "description": "The goose release the Real Adapter Contract Tests lane installs. goose ships as a native binary from its GitHub releases rather than as an npm package, so it cannot ride package-lock.json; this file is its lockfile instead: one exact version, the release asset the lane downloads, and that asset's sha256, which the lane checks before unpacking. test/real_adapter_gate.py reads it for MEASURED_GOOSE_VERSION. To bump: change all three fields together, from the release's own asset, and re-measure whatever the lane then reds.",
+  "version": "1.50.1",
+  "repository": "aaif-goose/goose",
+  "asset": "goose-x86_64-unknown-linux-gnu.tar.gz",
+  "sha256": "2c21e82360f3670f52decb6dddd91857aa6c181cc30e4fddb699b3bf96189e2d"
+}

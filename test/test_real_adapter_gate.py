@@ -28,6 +28,7 @@ from real_adapter_gate import (
     MANIFEST,
     MARKER,
     MEASURED_CODEX_ACP_VERSION,
+    MEASURED_GOOSE_VERSION,
     MEASURED_OPENCODE_VERSION,
     OPENCODE_PACKAGE,
     REQUIRE_ENV,
@@ -202,6 +203,9 @@ def test_the_lane_installs_from_the_committed_lockfile_and_copies_no_pin():
     assert "real_adapter_gate" in lane
     assert MEASURED_CODEX_ACP_VERSION not in workflow
     assert MEASURED_OPENCODE_VERSION not in workflow
+    assert MEASURED_GOOSE_VERSION not in workflow
+    assert "real_adapters/goose.json" in lane
+    assert "sha256" in lane, "the goose download must be checked against its pinned hash"
 
 
 def test_the_manifest_pins_exact_releases_and_the_lockfile_agrees():

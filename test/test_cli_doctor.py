@@ -729,34 +729,47 @@ class TestBackendAbilityCardRows:
             assert f"projection: '{declared.kind.value}'" in out, backend
 
     def test_the_in_use_row_states_the_declared_reach(self, capsys):
-        """The line the maintainer's ruling turned into a row."""
-        from kiro_crew.providers.mirrors import PROJECTIONS, PerToolDeny
+        """The line the maintainer's ruling turned into a row, for every reach."""
+        from kiro_crew.acp_backends import selectable_backend_values
+        from kiro_crew.providers.mirrors import PROJECTIONS
 
         declared = sorted(
-            backend
+            (backend, projection.per_tool_deny.value)
             for backend, projection in PROJECTIONS.items()
-            if projection.per_tool_deny is PerToolDeny.WHOLE_SERVER
+            if projection.per_tool_deny is not None and backend in selectable_backend_values()
         )
-        assert declared, "no harness declares the whole-server reach any more"
-        for backend in declared:
+        assert declared, "no selectable harness declares a per-tool deny reach"
+        for backend, reach in declared:
             cli_doctor._doctor_backend_ability_cards(self._cfg(backend))
             out = capsys.readouterr().out
             label = cli_doctor._backend_policy_label(backend)
             row = next(
                 line for line in out.splitlines() if line.strip().startswith(f"{label} (in use):")
             )
-            assert "per-tool deny: 'whole-server'" in row, backend
+            assert f"per-tool deny: '{reach}'" in row, backend
 
-    def test_the_whole_server_reach_says_what_it_costs_once(self, capsys):
+    @staticmethod
+    def _as_whole_server(monkeypatch, backend: str) -> None:
+        """Make *backend*'s card read ``whole-server``, which no shipped harness does."""
+        import dataclasses
+
+        from kiro_crew.agent_sdk import backend_mcp_ability
+
+        real = backend_mcp_ability.ability_for
+
+        def patched(name):
+            ability = real(name)
+            if name == backend:
+                return dataclasses.replace(ability, per_tool_deny="whole-server")
+            return ability
+
+        monkeypatch.setattr(backend_mcp_ability, "ability_for", patched)
+
+    def test_the_whole_server_reach_says_what_it_costs_once(self, capsys, monkeypatch):
         """The consequence a reader cannot recover from the declared value alone."""
         import re as _re
 
-        from kiro_crew.providers.mirrors import PROJECTIONS, PerToolDeny
-
-        declared = sorted(
-            b for b, p in PROJECTIONS.items() if p.per_tool_deny is PerToolDeny.WHOLE_SERVER
-        )
-        assert declared, "no harness declares the whole-server reach any more"
+        self._as_whole_server(monkeypatch, "opencode")
         cli_doctor._doctor_backend_ability_cards(self._cfg("claude"))
         out = capsys.readouterr().out
         flat = " ".join(out.split())
@@ -764,19 +777,22 @@ class TestBackendAbilityCardRows:
         assert flat.count("kirocrew-core") == 1, "one sentence, not one per harness"
         named = _re.search(r"On (.+?), switching a single MCP tool off", flat)
         assert named, flat
-        for backend in declared:
-            assert cli_doctor._backend_policy_label(backend) in named.group(1), backend
+        assert cli_doctor._backend_policy_label("opencode") in named.group(1)
 
-    def test_a_harness_whose_tool_off_costs_one_tool_is_not_named_in_the_caveat(self, capsys):
+    def test_a_harness_whose_tool_off_costs_one_tool_is_not_named_in_the_caveat(
+        self, capsys, monkeypatch
+    ):
         """The sentence holds for the reach it describes, and for no other."""
         import re as _re
 
         from kiro_crew.providers.mirrors import PROJECTIONS, PerToolDeny
 
+        self._as_whole_server(monkeypatch, "opencode")
         spared = sorted(
             b
             for b, p in PROJECTIONS.items()
             if p.per_tool_deny in (PerToolDeny.SETTINGS_FILE, PerToolDeny.PER_CALL)
+            and b != "opencode"
         )
         assert spared, "no harness keeps a tool-off per tool any more"
         cli_doctor._doctor_backend_ability_cards(self._cfg("claude"))
@@ -785,6 +801,15 @@ class TestBackendAbilityCardRows:
         assert named, out
         for backend in spared:
             assert cli_doctor._backend_policy_label(backend) not in named.group(1), backend
+
+    def test_no_caveat_is_printed_while_no_harness_carries_the_reach(self, capsys):
+        """The shipped tables declare no ``whole-server`` harness, so the sentence that
+        warns about one has nothing to name and must not appear."""
+        from kiro_crew.providers.mirrors import PROJECTIONS, PerToolDeny
+
+        assert not any(p.per_tool_deny is PerToolDeny.WHOLE_SERVER for p in PROJECTIONS.values())
+        cli_doctor._doctor_backend_ability_cards(self._cfg("claude"))
+        assert "switching a single MCP tool off" not in capsys.readouterr().out
 
     def test_a_withhold_is_named_by_the_key_the_spec_spells(self, capsys):
         """The reader is holding the agent file, so the row names its own keys."""
@@ -925,15 +950,15 @@ class TestSelectedBackendProjectionRow:
         record drift, so the selected-harness row states the kind's own gap and
         nothing about the reach.
 
-        Driven on the shipped opencode declaration, which carries `whole-server`, so
-        the assertion is about the report rather than about a stub.
+        Driven on the shipped opencode declaration, so the assertion is about the
+        report rather than about a stub.
         """
         cli_doctor._doctor_selected_backend_projection(self._cfg("opencode"))
         assert capsys.readouterr().out == ""
 
         cli_doctor._doctor_backend_ability_cards(self._cfg("opencode"))
         out = capsys.readouterr().out
-        assert out.count("per-tool deny: 'whole-server'") == 1, out
+        assert out.count("per-tool deny: 'settings-file'") == 1, out
 
     def test_the_shipped_tables_hold_exactly_the_declared_no_channel_backends(self):
         """The row's own subject, read off the SHIPPED tables rather than a stub.

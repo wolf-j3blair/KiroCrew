@@ -142,9 +142,9 @@ OFF_CARD_CONCERNS: Mapping[str, str] = {
 #: Two of the three, and the second one is the reason this is a set rather than a
 #: comparison against ``whole-server``. ``whole-server`` has no per-call identity to
 #: match, so withholding the server entire is the only faithful answer -- Crew's own
-#: control plane included. ``per-call`` stays per tool on Crew's OWN servers and
-#: withholds any other server whole, so a reader with a third-party server meets the
-#: same accident. ``settings-file`` is the one reach that costs exactly the tool it
+#: control plane included. ``per-call`` stays per tool on Crew's OWN servers and, on
+#: codex, withholds any other server whole, so a reader with a third-party server meets
+#: the same accident. ``settings-file`` is the one reach that costs exactly the tool it
 #: names, everywhere, which is why it is not here.
 #:
 #: Named here rather than in each renderer: a consumer that spelled the comparison

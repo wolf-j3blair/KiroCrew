@@ -454,23 +454,22 @@ def test_the_classification_reaches_the_wire_for_every_shipped_harness() -> None
 # ── 5. the shipped declarations, end to end ─────────────────────────────────
 
 
-def test_the_shipped_whole_server_harnesses_say_so_on_their_card() -> None:
+def test_every_mirrors_declared_reach_is_said_on_its_card() -> None:
     """The row the maintainer's ruling turned into a card line.
 
     Per-tool ``mcp.deny`` is NOT a hard requirement on every provider. A harness
     without a per-call deny channel withholds the whole server instead, and what it
     owes a reader is to DECLARE that before a session runs. This asserts the
-    declaration reaches the card for every harness that carries it -- by set rather
-    than by one id, so a harness that gains or loses the reach is caught.
+    declaration reaches the card for every mirror, whichever reach it declares.
     """
     declared = {
-        backend
+        backend: projection.per_tool_deny
         for backend, projection in PROJECTIONS.items()
-        if projection.per_tool_deny is PerToolDeny.WHOLE_SERVER
+        if projection.per_tool_deny is not None
     }
-    assert declared, "no harness declares the whole-server reach any more"
-    for backend in declared:
-        assert mcp_mod.ability_for(backend).per_tool_deny == PerToolDeny.WHOLE_SERVER.value
+    assert declared, "no harness declares a per-tool deny reach"
+    for backend, reach in declared.items():
+        assert mcp_mod.ability_for(backend).per_tool_deny == reach.value, backend
 
 
 def test_a_withhold_and_a_no_channel_are_separate_lists() -> None:

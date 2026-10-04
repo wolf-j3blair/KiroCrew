@@ -109,8 +109,10 @@ class PerToolDeny(str, Enum):
     three members.
     """
 
-    #: The restriction reaches the harness as a per-tool rule in a file Crew writes,
-    #: so the narrowed server stays MOUNTED and the harness itself refuses the tool.
+    #: The restriction reaches the harness as a per-tool rule in config Crew writes --
+    #: a settings file for claude, the inline OPENCODE_CONFIG_CONTENT block for
+    #: opencode -- so the narrowed server stays MOUNTED and the harness itself
+    #: refuses the tool.
     SETTINGS_FILE = "settings-file"
     #: No per-tool slot on the wire, but the backend asks permission per MCP call
     #: with an identity Crew can match, so Crew refuses the call itself. The narrowed
@@ -274,18 +276,15 @@ PROJECTIONS: dict[str, McpProjection] = {
         "permission routing alone) MERGES rather than replaces, and declaring one "
         "server in both that block and the array double-mounts it, so the array is "
         "this backend's whole MCP channel",
-        # WHOLE-SERVER ONLY, and declared rather than enforced. There is no per-tool
-        # slot on the element and no file of Crew's, and unlike codex there is no
-        # per-call fallback either: this harness emits no _meta.kiro and no
-        # rawInput.server/tool -- only a fused `<server>_<tool>` title -- so
-        # AcpClient._deny_spec_disabled_tool has nothing to match and the mirror
-        # returns an empty deny set rather than pairs that could never fire. A
-        # narrowed server is therefore withheld whole, Crew's own control plane
-        # included (providers/mirrors/opencode.py::narrowed_control_plane), which is
-        # where this backend parts company with codex. Per-tool MCP deny is not a
-        # requirement on every provider; what this field owes a reader is that they
-        # are getting the whole-server form here BEFORE a session runs.
-        per_tool_deny=PerToolDeny.WHOLE_SERVER,
+        # SETTINGS-FILE, where the "file" is the inline config block Crew already seeds
+        # for the permission routing (OPENCODE_CONFIG_CONTENT). Each switched-off tool
+        # becomes a `deny` rule under the harness's own tool id, placed after the seed's
+        # `"*": "ask"`; measured on opencode 1.18.30, that hides the one tool while its
+        # siblings stay listed and still ask. The routing read-back then evaluates the
+        # resolved rules the way the harness does (last match wins), and a server whose
+        # rule a lower config source outranked is withheld whole
+        # (providers/mirrors/opencode.py::opencode_projection).
+        per_tool_deny=PerToolDeny.SETTINGS_FILE,
     ),
     ACP_BACKEND_PI: McpProjection(
         kind=ProjectionKind.NO_CHANNEL,
@@ -330,17 +329,18 @@ PROJECTIONS: dict[str, McpProjection] = {
         "element whose command cannot start is DROPPED rather than failing session/new, so "
         "an unstartable pooled broker stub costs no session and leaves a healthy-looking "
         "one carrying none of Crew's tools",
-        # WHOLE-SERVER as a CONSERVATIVE choice, which is the one way this differs from
-        # opencode's identical verdict. goose puts the pair on the wire, as
-        # _meta.goose.toolCall.toolName and extensionName on the tool_call frame, and Crew
-        # reads it -- the identity table in acp._dispatch carries a row for that channel,
-        # so the per-call deny path does match a denied pair here. The half still missing
-        # is the projection side: no per-tool form mounts a narrowed server with its denied
-        # tools filtered out of the array, the way codex's does. Withholding the server
-        # whole, Crew's own control plane included, is the direction that cannot leave a
-        # switched-off tool reachable while that is true. Follow-up: a per-tool projection
-        # for this harness, after which the verdict is TRANSLATED per tool.
-        per_tool_deny=PerToolDeny.WHOLE_SERVER,
+        # PER-CALL, and complete for a third-party server as well as for the control
+        # plane, which is where this differs from codex. goose asks
+        # session/request_permission for every MCP call under GOOSE_MODE=approve, a
+        # readOnlyHint tool included, and puts the pair on the tool_call frame as
+        # _meta.goose.toolCall.toolName and extensionName, which acp._dispatch reads; a
+        # reject_once answer means the tool never runs (all measured on goose 1.50.1).
+        # So a narrowed server stays mounted and the projection hands the client every
+        # switched-off pair. Withheld whole only where that measured channel breaks: a
+        # server name goose folds to another spelling, or a tool goose's own
+        # permission.yaml pre-approves under always_allow
+        # (providers/mirrors/goose.py::goose_projection).
+        per_tool_deny=PerToolDeny.PER_CALL,
     ),
     ACP_BACKEND_DEEPSEEK: McpProjection(
         kind=ProjectionKind.BROKER_ONLY,

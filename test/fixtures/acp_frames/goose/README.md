@@ -103,8 +103,9 @@ and the tool is REACHABLE — not merely that an element was accepted.
 Two things ride along. The tool grammar is `<serverName>__<toolName>` — a DOUBLE
 underscore and no `mcp__` prefix — and the pair is carried BOTH in the human-readable
 title and, separately, as `toolName` and `extensionName` under `_meta.goose.toolCall`.
-That second channel is why this harness's `whole-server` per-tool-deny verdict is a
-missing reader rather than a missing channel.
+That second channel is what this harness's `per-call` per-tool-deny verdict rests on:
+the client matches the pair against the spec's switched-off tools and answers
+`reject_once`.
 
 `mcp-stdio-dropped-live.jsonl` is the other half, and it is a hazard. The same element
 with a command that cannot start does not fail `session/new`: the session is created

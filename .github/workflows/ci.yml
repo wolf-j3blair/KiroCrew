@@ -1846,6 +1846,52 @@ jobs:
           print(f"codex-acp {codex}, opencode {opencode}: both the pinned release")
           PY
 
+      # goose ships as a native binary from GitHub releases, not on npm, so it cannot
+      # ride the lockfile. Its lock is test/real_adapters/goose.json: one exact
+      # version, the release asset, and that asset's sha256. The download is refused
+      # unless the hash matches, so a re-tagged release cannot change what is
+      # measured; the version check below is the binary's own answer.
+      - name: Install the pinned goose release
+        run: |
+          python3 - <<'PY'
+          import hashlib
+          import subprocess
+          import sys
+          import tarfile
+          import urllib.request
+
+          sys.path.insert(0, "test")
+          import real_adapter_gate as gate
+
+          pin = gate.goose_pin()
+          url = (
+              f"https://github.com/{pin['repository']}/releases/download/"
+              f"v{pin['version']}/{pin['asset']}"
+          )
+          dest = gate.MANIFEST_DIR / "node_modules" / ".goose"
+          dest.mkdir(parents=True, exist_ok=True)
+          archive = dest / pin["asset"]
+          with urllib.request.urlopen(url, timeout=300) as response:
+              archive.write_bytes(response.read())
+          digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+          assert digest == pin["sha256"], f"goose asset sha256 {digest}, {pin['sha256']} pinned"
+          with tarfile.open(archive) as tar:
+              # The asset spells its entry "./goose"; only that one regular file is
+              # taken, under the "data" filter, so nothing else lands on disk.
+              (member,) = [m for m in tar.getmembers() if m.name.lstrip("./") == "goose"]
+              assert member.isfile(), "the goose asset's 'goose' entry is not a regular file"
+              member.name = "goose"
+              tar.extract(member, dest, filter="data")
+          binary = dest / "goose"
+          binary.chmod(0o755)
+          version = subprocess.run(
+              [str(binary), "--version"],
+              check=True, capture_output=True, encoding="utf-8", timeout=120,
+          ).stdout.strip()
+          assert version == pin["version"], f"goose {version!r} installed, {pin['version']} pinned"
+          print(f"goose {version}: the pinned release, sha256 checked")
+          PY
+
       - uses: ./.github/actions/run-as-runner
 
       - name: Run the real-adapter contract tests
@@ -1856,6 +1902,7 @@ jobs:
         env:
           CODEX_ACP_BIN: ${{ github.workspace }}/test/real_adapters/node_modules/@agentclientprotocol/codex-acp/dist/index.js
           OPENCODE_BIN: ${{ github.workspace }}/test/real_adapters/node_modules/.bin/opencode
+          GOOSE_BIN: ${{ github.workspace }}/test/real_adapters/node_modules/.goose/goose
         run: |
           # As in backend-test: the `python` matcher annotates any traceback in the
           # log, including one printed inside a warning, and never matches a pytest
@@ -1864,7 +1911,8 @@ jobs:
           pytest -v -n0 --no-cov --timeout=1200 -m real_adapter \
             --junitxml="$RUNNER_TEMP/real-adapter-results.xml" \
             test/test_codex_session_mcp.py \
-            test/test_opencode_session_mcp.py
+            test/test_opencode_session_mcp.py \
+            test/test_per_tool_mcp_deny_single_binary.py
 
       # The second half of the no-silent-skip rule, and the half that does not trust
       # the first. KIROCREW_E2E_REQUIRE turns an absent adapter into a failure; this
@@ -1880,7 +1928,7 @@ jobs:
       - name: Require every contract test to have executed
         if: always()
         env:
-          MEASURED_CONTRACT_FLOOR: "4"
+          MEASURED_CONTRACT_FLOOR: "11"
         run: |
           python3 - <<'PY'
           import os

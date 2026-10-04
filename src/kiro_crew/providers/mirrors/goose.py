@@ -5,15 +5,17 @@ the array's MECHANICS are the same ones :mod:`kiro_crew.providers.mirrors.openco
 already owns: the same shared translation
 (:func:`kiro_crew.acp.session_mcp.session_mcp_servers`, no new translator), the same
 ``tools`` allowlist, the same registry filter, the same control-plane re-derivation,
-and the same one-owner rule for the pooled broker stubs. So this module DELEGATES to
-that one's module-level functions rather than restating them, and carries what is
-actually goose's: the rulings prose, and the two wire facts that differ.
+and the same one-owner rule for the pooled broker stubs. So this module DELEGATES the
+array to that one's :func:`~kiro_crew.providers.mirrors.opencode.place_single_binary_array`
+rather than restating it, and carries what is actually goose's: how a switched-off
+tool is honoured, the rulings prose, and the wire facts that differ.
 
-What differs, and neither changes the projection:
+What differs:
 
 * The tool-name grammar is ``<server>__<tool>`` -- two underscores, and no ``mcp__``
   prefix -- where opencode fuses with one. goose also carries the pair separately as
-  ``_meta.goose.toolCall.toolName`` and ``extensionName``.
+  ``_meta.goose.toolCall.toolName`` and ``extensionName``, which is what lets the
+  client refuse a switched-off tool per call (:func:`goose_projection`).
 * An element whose command cannot start is DROPPED rather than failing
   ``session/new`` whole.
 
@@ -24,15 +26,140 @@ refactor of both, which is not this change's to make.
 
 from __future__ import annotations
 
+import logging
+import os
+import re
+from pathlib import Path
 from typing import Any, Collection, Mapping
 
+import yaml  # type: ignore[import-untyped]
+
+from kiro_crew import platform_compat
+from kiro_crew.acp.session_mcp import session_mcp_projection
 from kiro_crew.agent_sdk.backends import ACP_BACKEND_GOOSE
 from kiro_crew.providers.mirrors.base import AgentConfigMirror, Concern
 from kiro_crew.providers.mirrors.base import Disposition as _D
 from kiro_crew.providers.mirrors.base import Ruling, SessionProjection
-from kiro_crew.providers.mirrors.opencode import opencode_projection
+from kiro_crew.providers.mirrors.opencode import place_single_binary_array
 
-__all__ = ["GooseMirror", "goose_projection"]
+__all__ = ["GooseMirror", "goose_always_allowed", "goose_projection"]
+
+logger = logging.getLogger(__name__)
+
+
+#: A server name goose reports back UNCHANGED as ``extensionName``. Measured on goose
+#: 1.50.1: ``probe-core`` comes back as ``probe-core``, while ``Probe_X.y`` comes back
+#: as ``probe_x_y`` (lower-cased, other characters folded to ``_``). The per-call
+#: refusal compares that reported name with the spec's, so a name outside this class
+#: would never match and its deny would silently never fire. Such a server is withheld
+#: whole instead. Tool names are reported as given, so they need no such check.
+_GOOSE_PLAIN_SERVER_NAME = re.compile(r"[a-z0-9_-]+")
+
+#: The file goose reads per-tool permission levels from, under its config directory.
+_GOOSE_PERMISSION_FILE = "permission.yaml"
+
+
+def goose_permission_files(
+    env: Mapping[str, str], *, windows: bool | None = None
+) -> tuple[Path, ...]:
+    """Every ``permission.yaml`` a goose child started with *env* may read.
+
+    goose 1.50.1 puts its config directory at ``$GOOSE_PATH_ROOT/config`` when that is
+    set. Otherwise it is ``%APPDATA%\\Block\\goose\\config`` on Windows, and
+    ``$XDG_CONFIG_HOME/goose`` (``~/.config/goose`` without it) everywhere else; the
+    POSIX paths were measured. Every candidate the environment names is returned, on
+    every platform: reading one file more than the harness does can only withhold,
+    never mount.
+
+    EMPTY when the platform's own location cannot be derived -- no ``GOOSE_PATH_ROOT``
+    and no ``APPDATA`` on Windows, or no ``XDG_CONFIG_HOME`` and no ``HOME`` elsewhere.
+    The caller reads that as "unknown", never as "allows nothing". *windows* defaults
+    to the running platform.
+    """
+    is_windows = platform_compat.IS_WINDOWS if windows is None else windows
+    paths: list[Path] = []
+    root = (env.get("GOOSE_PATH_ROOT") or "").strip()
+    if root:
+        paths.append(Path(root).expanduser() / "config" / _GOOSE_PERMISSION_FILE)
+    appdata = (env.get("APPDATA") or "").strip()
+    if appdata:
+        paths.append(Path(appdata) / "Block" / "goose" / "config" / _GOOSE_PERMISSION_FILE)
+    xdg = (env.get("XDG_CONFIG_HOME") or "").strip()
+    home = (env.get("HOME") or "").strip()
+    if xdg:
+        paths.append(Path(xdg).expanduser() / "goose" / _GOOSE_PERMISSION_FILE)
+    elif home:
+        paths.append(Path(home) / ".config" / "goose" / _GOOSE_PERMISSION_FILE)
+    native = bool(root) or (bool(appdata) if is_windows else bool(xdg or home))
+    return tuple(paths) if native else ()
+
+
+def goose_always_allowed(
+    env: Mapping[str, str], *, windows: bool | None = None
+) -> frozenset[str] | None:
+    """Tool names goose runs WITHOUT asking, from its ``permission.yaml``, lower-cased.
+
+    goose lists a tool there as ``<extension>__<tool>`` under ``always_allow``, and a
+    tool listed there is run with no ``session/request_permission`` at all -- measured
+    on goose 1.50.1 even with ``GOOSE_MODE=approve``. That skips Crew's per-call
+    refusal, so a switched-off tool listed there would run. Every section's
+    ``always_allow`` list is read (``user`` and ``smart_approve`` alike), because
+    reading more can only withhold more.
+
+    ``None`` when a file exists but cannot be read or parsed, or when goose's own
+    config location cannot be derived from *env* at all: what it allows is unknown,
+    and the caller treats unknown as "allows everything". A missing file allows
+    nothing.
+    """
+    paths = goose_permission_files(env, windows=windows)
+    if not paths:
+        return None
+    found: set[str] = set()
+    for path in paths:
+        try:
+            text = path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            continue
+        except (OSError, UnicodeDecodeError):
+            return None
+        try:
+            data = yaml.safe_load(text)
+        except yaml.YAMLError:
+            return None
+        if data is None:
+            continue
+        if not isinstance(data, dict):
+            return None
+        for section in data.values():
+            if not isinstance(section, dict):
+                continue
+            allowed = section.get("always_allow")
+            if allowed is None:
+                continue
+            if not isinstance(allowed, list):
+                return None
+            found.update(str(entry).casefold() for entry in allowed)
+    return frozenset(found)
+
+
+def goose_unhonoured_servers(
+    disabled_tools: Collection[tuple[str, str]], always_allowed: frozenset[str] | None
+) -> frozenset[str]:
+    """Narrowed servers whose per-call refusal cannot be trusted to fire on goose.
+
+    Two reasons, each measured: goose reports the server under a different name than
+    the spec's (:data:`_GOOSE_PLAIN_SERVER_NAME`), so no refusal could match; or goose
+    runs the switched-off tool without asking, because ``permission.yaml`` lists it
+    under ``always_allow`` (or that file could not be read, *always_allowed* ``None``).
+    Free of I/O.
+    """
+    out: set[str] = set()
+    for server, tool in disabled_tools:
+        if not _GOOSE_PLAIN_SERVER_NAME.fullmatch(server):
+            out.add(server)
+        elif always_allowed is None or f"{server}__{tool}".casefold() in always_allowed:
+            out.add(server)
+    return frozenset(out)
 
 
 def goose_projection(
@@ -44,28 +171,75 @@ def goose_projection(
     session_key: str = "",
     channel_id: str = "",
     session_token: str = "",
+    harness_env: Mapping[str, str] | None = None,
 ) -> SessionProjection:
-    """The whole goose array -- spec translation AND pooled stubs.
+    """The whole goose array -- spec translation AND pooled stubs -- plus the deny set.
 
-    The sibling harness's projection verbatim, because every rule it applies is a rule
-    this transport needs for the SAME measured reason rather than by resemblance: one
-    owner for both halves of the array (a stub appended after the projection withheld
-    that name would un-withhold it, and the stub is the unrestricted server), a
-    third-party server narrowed per tool withheld whole, and Crew's own control plane
-    withheld on the same terms when an operator narrowed it deliberately.
+    The array is placed by the same function opencode's is
+    (:func:`~kiro_crew.providers.mirrors.opencode.place_single_binary_array`). What
+    differs is how a switched-off tool is honoured: per CALL, the way codex does it.
+    goose asks ``session/request_permission`` for every MCP call under the mode Crew
+    pins (``GOOSE_MODE=approve``), including a tool annotated ``readOnlyHint`` --
+    measured on goose 1.50.1 -- and the ``tool_call`` frame before it names the pair
+    as ``_meta.goose.toolCall.{extensionName,toolName}``. So ``denied_tools`` carries
+    every switched-off pair, and the client answers a call to one with goose's
+    ``reject_once`` before it runs (``AcpClient._deny_spec_disabled_tool``). That
+    channel is complete for a third-party server too, unlike codex's, so a narrowed
+    server stays MOUNTED, Crew's own control plane included.
 
-    Named here rather than imported at the call site so a reader looking for goose's
-    projection finds goose's name, and so the day the two stop agreeing this is the one
-    function that changes.
+    The exception is :func:`goose_unhonoured_servers`: a server goose renames, or
+    whose switched-off tool its ``permission.yaml`` pre-approves. Those are withheld
+    whole, with a warning. *harness_env* is the environment the goose child starts
+    with, which decides where that file is; ``None`` reads the gateway's own.
+
+    Blocking (parses the agent spec once and reads ``permission.yaml``), so callers
+    run it off the event loop.
     """
-    return opencode_projection(
+    projection = session_mcp_projection(
         agent,
         stub_server_names=stub_server_names,
+        work_dir=work_dir,  # type: ignore[arg-type]
+    )
+    always_allowed: frozenset[str] | None = frozenset()
+    if projection.disabled_tools:
+        always_allowed = goose_always_allowed(os.environ if harness_env is None else harness_env)
+    unhonoured = goose_unhonoured_servers(projection.disabled_tools, always_allowed)
+    for server in sorted(unhonoured):
+        logger.warning(
+            "goose session MCP: a switched-off tool on %r cannot be refused per call on "
+            "this session -- %s",
+            server,
+            (
+                "goose reports this server under a different name, so a refusal could "
+                "never match it; rename the server to lower-case letters, digits, _ and -"
+                if not _GOOSE_PLAIN_SERVER_NAME.fullmatch(server)
+                else (
+                    "goose's permission.yaml could not be read or located, so it may "
+                    "pre-approve it"
+                    if always_allowed is None
+                    else "goose's permission.yaml lists it under always_allow, so goose runs it "
+                    "without asking; remove that entry to restore per-tool deny"
+                )
+            ),
+        )
+    out = place_single_binary_array(
+        projection,
+        label="goose",
+        unhonoured=unhonoured,
         stub_elements=stub_elements,
-        work_dir=work_dir,
         session_key=session_key,
         channel_id=channel_id,
         session_token=session_token,
+    )
+    return SessionProjection(
+        params={"mcpServers": out},
+        # Every pair, withheld servers included: a name something else re-adds stays
+        # refusable at the permission request.
+        denied_tools=frozenset(projection.disabled_tools),
+        disabled_servers=projection.disabled_servers,
+        restricted_servers=unhonoured,
+        unhonoured_servers=unhonoured,
+        derived_spec_snapshot=projection.derived_spec_snapshot,
     )
 
 
@@ -99,18 +273,22 @@ class GooseMirror(AgentConfigMirror):
             ),
             Concern.DENIED_TOOLS: Ruling(
                 _D.TRANSLATED,
-                "by withholding the server it narrows, Crew's own control plane "
-                "included, and declared as per_tool_deny=whole-server on the projection "
-                "record. This is a CONSERVATIVE choice, not a forced one. The channel is "
-                "on the wire -- _meta.goose.toolCall.toolName and extensionName on the "
-                "tool_call frame -- and Crew reads it: the identity table in acp._dispatch "
-                "carries a row for it, so a denied (server, tool) pair does match on the "
-                "per-call path. What is missing is the other half of what codex has: a "
-                "PROJECTION that mounts a narrowed server while filtering its denied "
-                "tools out of the array. Until that exists, withholding the whole server "
-                "is the choice that cannot leave a switched-off tool reachable, and it is "
-                "the conservative direction of the two. Follow-up: give this harness a "
-                "per-tool projection and the verdict becomes TRANSLATED per tool",
+                "per call, into the deny set the client refuses a permission request "
+                "by, and declared as per_tool_deny=per-call on the projection record. "
+                "goose asks session/request_permission for every MCP call under "
+                "GOOSE_MODE=approve, a readOnlyHint tool included, and the tool_call "
+                "frame before it names the pair as _meta.goose.toolCall.extensionName "
+                "and toolName, which the identity table in acp._dispatch reads -- all "
+                "measured on goose 1.50.1, where answering reject_once means the "
+                "tool never runs. That channel is complete for a third-party server "
+                "as well as for Crew's own control plane, so a narrowed server stays "
+                "MOUNTED. Two measured gaps withhold a server whole instead: goose "
+                "reports a name outside lower-case letters, digits, _ and - under a "
+                "folded spelling no refusal could match, and a tool listed under "
+                "always_allow in goose's permission.yaml runs without asking at all. "
+                "The projection reads that file before the session starts "
+                "(goose_always_allowed); an unreadable one counts as allowing "
+                "everything",
             ),
             Concern.MODEL: Ruling(
                 _D.DELIVERED,
@@ -215,10 +393,12 @@ class GooseMirror(AgentConfigMirror):
         session_token: str = "",
         **kwargs: object,
     ) -> SessionProjection:
-        """The structured face: :func:`goose_projection`, with ``kwargs`` ignored as
-        :meth:`session_params` documents. ``denied_tools`` is empty on this backend by
-        decision, not by default -- see the ``disabledTools`` ruling."""
-        del kwargs
+        """The structured face: :func:`goose_projection`.
+
+        ``harness_env`` arrives in ``kwargs``: the environment the goose child starts
+        with, which decides where its ``permission.yaml`` is. Every other keyword in
+        ``kwargs`` is ignored, as :meth:`session_params` documents."""
+        env = kwargs.get("harness_env")
         return goose_projection(
             agent,
             stub_server_names=stub_server_names,
@@ -227,4 +407,5 @@ class GooseMirror(AgentConfigMirror):
             session_key=session_key,
             channel_id=channel_id,
             session_token=session_token,
+            harness_env=env if isinstance(env, Mapping) else None,
         )
