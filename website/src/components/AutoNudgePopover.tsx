@@ -272,13 +272,21 @@ export default function AutoNudgePopover({ slotKey, loop, open, onOpenChange, on
   }
   const formDirty = editedFields() !== null
 
+  /** An ACTIVE loop holding for an unanswered approval. It fires nothing, so
+   *  it reads and acts as paused: the paused control set (Pause off, Play to
+   *  resume, Clear), and Play's fire is what releases the hold server-side. It
+   *  also resumes by itself once a person answers an approval or sends a
+   *  message. */
+  const heldForApproval = !!loop?.active && loop.approval_stalled === true
+  /** Running in the sense the controls mean: active and not held. */
+  const runsNow = !!loop?.active && !heldForApproval
   const pauseName = i18nT('components.autoNudgePopover.pause_loop')
   /** The fire control names what THIS press does: with no loop it creates and
    *  starts the loop (no fire); on a loop it fires now, resuming first when the
    *  loop is paused and saving first when the form is dirty. */
   const playName = !loop
     ? i18nT('components.autoNudgePopover.start_loop')
-    : loop.active
+    : runsNow
       ? i18nT(formDirty ? 'components.autoNudgePopover.trigger_nudge' : 'components.autoNudgePopover.nudge_now')
       : i18nT(formDirty ? 'components.autoNudgePopover.save_edits_and_resume' : 'components.autoNudgePopover.resume_loop')
   /** An icon-only `Btn` is square: `twMerge` lets `p-1.5` replace the text
@@ -472,23 +480,27 @@ export default function AutoNudgePopover({ slotKey, loop, open, onOpenChange, on
   /** THE STATUS LINE under the title, independent of the controls: a running
    *  loop's countdown, or why a paused one is paused. */
   const statusText = loop
-    ? loop.active
-      ? countdownText
-      : loop.stopped_reason && loop.stopped_reason in PAUSED_STATUS_KEY
-        ? i18nT(PAUSED_STATUS_KEY[loop.stopped_reason], { cycles: loop.cycle_count, max: loop.max_cycles })
-        : i18nT('components.autoNudgePopover.loop_paused')
+    ? heldForApproval
+      ? i18nT('components.autoNudgePopover.paused_approval_stalled')
+      : loop.active
+        ? countdownText
+        : loop.stopped_reason && loop.stopped_reason in PAUSED_STATUS_KEY
+          ? i18nT(PAUSED_STATUS_KEY[loop.stopped_reason], { cycles: loop.cycle_count, max: loop.max_cycles })
+          : i18nT('components.autoNudgePopover.loop_paused')
     : ''
   /** The title names the state: the goal's cycle while running, Paused while
    *  not, and the invitation when there is no loop. */
   const titleText = !loop
     ? i18nT('components.autoNudgePopover.set_a_goal')
-    : loop.active
+    : runsNow
       ? i18nT('components.autoNudgePopover.goal_active_cycle', { cycle: cycleText })
       : i18nT('components.autoNudgePopover.loop_paused')
   /** Whether a cycle is ALREADY armed to run. Derived from the same countdown
-   *  the status line renders, so the button and the text can never disagree. */
+   *  the status line renders, so the button and the text can never disagree.
+   *  Never while held: its deadline has passed but nothing is armed, and the
+   *  press is how a person resumes it. */
   const cycleAlreadyDue =
-    countdownText === i18nT('components.autoNudgePopover.next_cycle_due')
+    !heldForApproval && countdownText === i18nT('components.autoNudgePopover.next_cycle_due')
   /** Help line under the goal textarea while it carries the raw kill-switch
    *  token; '' otherwise. See the JSX comment at the render site (#10458). */
   const stopFileHelp = message.includes(STOP_FILE_TOKEN)
@@ -566,7 +578,7 @@ export default function AutoNudgePopover({ slotKey, loop, open, onOpenChange, on
           <p
             data-testid="auto-nudge-status"
             className={`mb-2 rounded-md border px-2 py-1.5 text-[11px] leading-relaxed ${
-              loop.active
+              runsNow
                 ? writeDisabled ? 'border-border bg-bg text-muted' : 'border-ok/30 bg-ok-subtle text-ok-fg'
                 : 'border-warn/30 bg-warn-subtle text-warn-fg'
             }`}
@@ -826,7 +838,7 @@ export default function AutoNudgePopover({ slotKey, loop, open, onOpenChange, on
           </div>
         ) : loop ? (
           <div className="flex items-center justify-between gap-2" data-testid="auto-nudge-actions">
-            {loop.active ? <span /> : (
+            {runsNow ? <span /> : (
               <button
                 type="button"
                 data-testid="auto-nudge-clear"
@@ -838,7 +850,7 @@ export default function AutoNudgePopover({ slotKey, loop, open, onOpenChange, on
               </button>
             )}
             <div className="flex items-center gap-2" data-testid="auto-nudge-controls">
-              <Btn type="button" className={ICON_BTN} onClick={pause} disabled={saving || writeDisabled || !loop.active} aria-label={pauseName} title={pauseName}>
+              <Btn type="button" className={ICON_BTN} onClick={pause} disabled={saving || writeDisabled || !runsNow} aria-label={pauseName} title={pauseName}>
                 <Pause size={14} aria-hidden />
               </Btn>
               <Btn
@@ -856,7 +868,7 @@ export default function AutoNudgePopover({ slotKey, loop, open, onOpenChange, on
                 aria-label={playName}
                 title={playName}
               >
-                {loop.active ? <Zap size={14} aria-hidden /> : <Play size={14} aria-hidden />}
+                {runsNow ? <Zap size={14} aria-hidden /> : <Play size={14} aria-hidden />}
                 {formDirty && (
                   <span data-testid="auto-nudge-play-dirty" aria-hidden className="absolute -top-0.5 -right-0.5 h-1.5 w-1.5 rounded-full bg-warn ring-1 ring-bg" />
                 )}

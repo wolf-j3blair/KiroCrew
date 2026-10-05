@@ -1835,6 +1835,12 @@ class GatewayOrchestrator:
                     )
                     try:
                         outcome = await asyncio.wait_for(pending.future, timeout=approval_timeout)
+                        # Answered on Slack or the dashboard: a loop paused for
+                        # approval in this thread resumes.
+                        if nudge_key:
+                            from kiro_crew.autonudge import release_approval_hold_for
+
+                            release_approval_hold_for(nudge_key, why="an approval was answered")
                     except asyncio.TimeoutError:
                         outcome = "rejected"
                         # Nobody answered on either surface -- this branch also
@@ -7621,6 +7627,9 @@ class GatewayOrchestrator:
                     # REST list already.
                     "next_due_ts": loop.next_due_ts,
                     "stopped_reason": loop.stopped_reason,
+                    # An ACTIVE loop holding for an unanswered approval; the
+                    # popover words it as paused.
+                    "approval_stalled": bool(loop.approval_stalled),
                 }
                 if is_structured_monitor_loop(loop):
                     assert loop.monitor is not None

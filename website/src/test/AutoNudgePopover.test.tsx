@@ -662,6 +662,19 @@ describe('AutoNudgePopover status line and Pause | Play controls', () => {
     expect(screen.queryByText(/Stopped/)).toBeNull()
   })
 
+  it('an active loop held for approval reads and acts paused: warn box, Pause off, Play resumes, Clear offered', () => {
+    renderWith(running({ approval_stalled: true, next_due_ts: Math.floor(Date.now() / 1000) - 5 }))
+    expect(status()!.textContent).toBe('Paused · waiting for your approval')
+    expect(status()!.className).toMatch(/\bbg-warn-subtle\b/)
+    expect(title()).toBe('Paused')
+    expectIconRow([PAUSE, RESUME])
+    expect(byLabel(PAUSE)!).toBeDisabled()
+    // Overdue but nothing armed: the press is how a person resumes it.
+    expect(byLabel(RESUME)!).toBeEnabled()
+    expect(byLabel(RESUME)!.querySelector('svg.lucide-play')).toBeTruthy()
+    expect(clearAction()).not.toBeNull()
+  })
+
   it('a running loop reads its countdown in the ok box and its cycle in the title; no loop has neither', () => {
     renderWith(running({ cycle_count: 2 }))
     expect(status()!.textContent).toMatch(/^Next cycle in .+$/)

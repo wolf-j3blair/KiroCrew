@@ -1587,7 +1587,8 @@ async def api_chat(request: web.Request) -> web.StreamResponse:
 
         _autonudge = _autonudge_get()
         if _autonudge is not None:
-            _autonudge.notify_user_input(slot.key)
+            # A person typing also ends an approval hold; an app's send does not.
+            _autonudge.notify_user_input(slot.key, human=not request_app)
     except Exception:
         logger.warning("autonudge.notify_user_input failed", exc_info=True)
 

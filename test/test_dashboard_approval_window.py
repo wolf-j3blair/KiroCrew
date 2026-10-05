@@ -740,3 +740,27 @@ class TestTimeoutCard:
         branch = src[idx : idx + 2000]
         assert "except asyncio.TimeoutError:" in branch
         assert "format_approval_timeout_card(_approval_window)" in branch
+
+
+class TestAnswerReleasesTheApprovalHold:
+    """A person's answer on the dashboard resumes a loop paused for approval.
+
+    Gated on the same host attribution the crew-log closer uses, so a timeout, a
+    no-budget decline, a Stop or a cancelled turn -- all host decisions -- never
+    release it.
+    """
+
+    def test_release_is_gated_on_no_host_attribution(self) -> None:
+        from kiro_crew.dashboard import chat_runner
+
+        src = inspect.getsource(chat_runner._run_chat)
+        gate = "if not (_host_deny_cause or _host_cancelled or _host_stopped):"
+        assert gate in src, "the release is not gated on the host attribution"
+        after = src.split(gate, 1)[1].split("\n")
+        body = [ln for ln in after[1:6] if ln.strip()]
+        assert any(
+            'release_approval_hold_for(slot.key, why="an approval was answered")' in ln
+            for ln in body
+        ), "the gated block does not release the hold"
+        timeout_branch = src.split("except asyncio.TimeoutError:", 1)[1].split("except ", 1)[0]
+        assert "release_approval_hold_for" not in timeout_branch
