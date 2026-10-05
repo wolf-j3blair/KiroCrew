@@ -5341,7 +5341,12 @@ class SubagentManager:
         a call that opens nothing is cheap. A pump failure is logged, never
         raised: the run that just progressed is not the one at fault, and the
         next terminal or arrival pumps again.
+
+        Also restarts the activity clock: the first-prompt silence window
+        (``_FIRST_PROMPT_SILENT_SECS``) measures from here, so the handshake
+        that preceded the PID is never charged to it.
         """
+        info.last_activity = time.time()
         try:
             self._drain_queue()
         except Exception:

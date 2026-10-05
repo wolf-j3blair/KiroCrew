@@ -26,6 +26,13 @@ _glue_logger = _logging.getLogger(__name__)
 #: a capacity wait and is deliberately not counted as a memory wait.
 _START_QUEUE_MAX_SECS = 1800.0
 
+#: Longest a start may stay silent after its runtime is up (``_pid`` is recorded
+#: only once the session exists) with no frame on its own session and no turn,
+#: before it is reaped as never answering its first prompt. Without it, a runtime
+#: that finished its handshake but wedged on the first prompt ran to the full
+#: ``subagent_timeout_secs``: the startup watchdog stops looking once a PID exists.
+_FIRST_PROMPT_SILENT_SECS = 300.0
+
 
 if TYPE_CHECKING:
     from kiro_crew import taskq as _taskq
@@ -1045,6 +1052,27 @@ class OrphanStallMonitor(ManagerComponent):
                     except Exception:
                         logger.exception("Reaper: failed to reap %s", agent_id)
                     continue
+                if self._is_first_prompt_silent(info, now):
+                    # Imported here: this ``_impl`` resolves globals in ``subagent``.
+                    from kiro_crew.subagent_manager.monitoring import _FIRST_PROMPT_SILENT_SECS
+
+                    logger.warning(
+                        "Reaper: subagent %s launched its runtime (pid %s) but nothing "
+                        "answered its first prompt for %ds (turn 0), force-killing",
+                        agent_id,
+                        info._pid,
+                        int(_FIRST_PROMPT_SILENT_SECS),
+                    )
+                    try:
+                        await self._manager._force_reap(
+                            agent_id,
+                            info,
+                            now - (info._exec_started or now),
+                            reason="startup_timeout",
+                        )
+                    except Exception:
+                        logger.exception("Reaper: failed to reap %s", agent_id)
+                    continue
                 # Idle-stall detection (see _maybe_flag_stall). The main-agent
                 # watchdog stack does not govern subagents; this is their
                 # equivalent — surface a "stalled" UI signal well before the
@@ -1124,6 +1152,27 @@ class OrphanStallMonitor(ManagerComponent):
             and info._pid is None
             and info._first_stream_started is None
             and starting > self._stamped_startup_deadline(info)
+        )
+
+    def _is_first_prompt_silent(self, info: SubagentInfo, now: float) -> bool:
+        """True if *info* launched its runtime but nothing answered its first prompt.
+
+        The complement of :meth:`_is_startup_stalled_impl`, which needs ``_pid is
+        None``: here the PID is recorded (the session exists), yet there is still
+        no turn and no frame addressed to this session, and the activity clock
+        (restarted when the PID is recorded, ``_note_startup_progress``) has
+        not moved for :data:`_FIRST_PROMPT_SILENT_SECS`, so handshake time is
+        never charged to the window. A start queued for a permit or
+        parked on an approval is not silent; it is waiting.
+        """
+        return (
+            info._exec_started is not None
+            and info._pid is not None
+            and info.turns == 0
+            and info._first_stream_started is None
+            and info._gate_wait_started is None
+            and not info._awaiting_approval
+            and now - info.last_activity > _FIRST_PROMPT_SILENT_SECS
         )
 
     def _start_queue_saturated_secs(self, info: SubagentInfo, now: float) -> float:
