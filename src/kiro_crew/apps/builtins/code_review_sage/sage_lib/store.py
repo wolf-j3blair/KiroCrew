@@ -151,6 +151,12 @@ DEFAULT_RULE_PACKS: dict[str, str] = {}
 # ``gh`` must be authenticated for each listed host.
 DEFAULT_GITHUB_HOSTS: list[str] = ["github.com"]
 
+# Hostnames accepted as Azure DevOps PR hosts, matched EXACTLY against the parsed
+# URL hostname (see ``adapters.ado_allowed_hosts``), plus ``*.visualstudio.com``
+# matched by suffix in the adapter. On-prem Azure DevOps Server users add their
+# instance here; the ``azure-devops`` MCP must be configured for it.
+DEFAULT_ADO_HOSTS: list[str] = ["dev.azure.com"]
+
 DEFAULT_CONFIG: dict[str, object] = {
     "schema": "code-review-sage-config",
     "version": 1,
@@ -183,6 +189,8 @@ DEFAULT_CONFIG: dict[str, object] = {
     "rule_packs": DEFAULT_RULE_PACKS,
     # GitHub-compatible hosts (github.com + optional GitHub Enterprise Server).
     "github_hosts": DEFAULT_GITHUB_HOSTS,
+    # Azure DevOps hosts (dev.azure.com + optional on-prem Azure DevOps Server).
+    "ado_hosts": DEFAULT_ADO_HOSTS,
     # Settled-change filtering defaults.
     "exclude_settled_by_default": True,
 }

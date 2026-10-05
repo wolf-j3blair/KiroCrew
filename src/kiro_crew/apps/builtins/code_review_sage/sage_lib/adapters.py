@@ -1,12 +1,16 @@
 #!/usr/bin/env python3
-"""Source adapter — normalize a GitHub PR link into a single ``ReviewTarget``.
-
-The brain only ever sees a ``ReviewTarget``. Adding a new platform later is a new
-adapter, not a brain change. This build ships the **GitHub PR** adapter only.
-
-The network fetch itself is performed by the pipeline via the ``gh`` CLI; this
-module is the deterministic, token-free part: parsing the fetched payload into a
+"""Source adapter — normalize a GitHub PR or Azure DevOps PR link into a single
 ``ReviewTarget``.
+
+The brain only ever sees a ``ReviewTarget``. Adding a new platform is a new
+adapter, not a brain change. This build ships two: the **GitHub PR** adapter and
+the **Azure DevOps PR** adapter.
+
+The network fetch itself is performed by the pipeline — GitHub via the ``gh``
+CLI, Azure DevOps via the ``azure-devops`` MCP (which, unlike GitHub, has no
+PR-diff endpoint, so the pipeline assembles per-file unified diffs from the two
+blob sides; see ``pipeline.ADO_FETCH_SPEC``). This module is the deterministic,
+token-free part: parsing the fetched payload into a ``ReviewTarget``.
 """
 from __future__ import annotations
 
@@ -25,6 +29,23 @@ _PR_PATH_RE = re.compile(r"^/([^/]+)/([^/]+)/pull/(\d+)")
 FIX_RE = re.compile(r"\b(fix(es|ed)?|revert(s|ed)?|bug|hotfix|regression|incident|patch)\b", re.I)
 # GitHub-style issue reference (e.g. "#204") linked from the PR body.
 GH_ISSUE_RE = re.compile(r"#(\d+)")
+
+# --- Azure DevOps PR path grammar -------------------------------------------
+# dev.azure.com (and Azure DevOps Server): /<org>/<project>/_git/<repo>/pullrequest/<id>
+_ADO_PATH_DEVAZURE = re.compile(
+    r"^/([^/]+)/([^/]+)/_git/([^/]+)/pullrequest/(\d+)", re.I)
+# Legacy *.visualstudio.com: the ORG is the subdomain, so the path omits it:
+# /<project>/_git/<repo>/pullrequest/<id>
+_ADO_PATH_VSTS = re.compile(
+    r"^/([^/]+)/_git/([^/]+)/pullrequest/(\d+)", re.I)
+# Canonical public Azure DevOps host.
+_ADO_HOST = "dev.azure.com"
+# Azure DevOps work-item reference (e.g. "AB#1234" / "#1234") linked from a PR.
+# The leading (?<![\w#]) boundary stops a match inside tokens like "v2#3" or a
+# URL fragment; the ``AB`` prefix is captured so it can be preserved verbatim —
+# "AB#1234" is the ADO work-item convention and distinguishes it from a bare
+# "#1234" GitHub issue reference.
+ADO_WORKITEM_RE = re.compile(r"(?<![\w#])(AB)?#(\d+)", re.I)
 
 
 class AdapterError(ValueError):
@@ -135,22 +156,28 @@ def allowed_hosts(config: dict | None = None) -> frozenset[str]:
 
 
 def detect_platform(link: str, *, config: dict | None = None) -> str:
-    """Return ``github`` for a PR link on an allowed GitHub host, else raise
+    """Return ``github`` or ``ado`` for a recognized PR link, else raise
     UnsupportedPlatform.
 
-    The host is validated against the ``allowed_hosts()`` allowlist by EXACT
-    match of the PARSED URL hostname (not a substring of the raw link), so a
-    URL where an allowed host merely appears in the path/query/userinfo (e.g.
+    Azure DevOps is tried FIRST because its grammar is unambiguous
+    (``/_git/.../pullrequest/<id>``) and cannot be confused with a GitHub
+    ``/pull/<n>`` path. Both platforms validate the host by EXACT match of the
+    PARSED URL hostname (not a substring of the raw link), so a URL where an
+    allowed host merely appears in the path/query/userinfo (e.g.
     ``https://evil.example/github.com/x/pull/1``) or as a spoofable
     prefix/suffix (``notgithub.com``, ``github.com.evil.example``) is rejected,
     and a malformed URL reads as unsupported rather than raising ``ValueError``.
     Aligns with SSRF/allowlist guidance (parse to components, default-deny)."""
     if not link or not isinstance(link, str):
         raise UnsupportedPlatform("empty or non-string link")
+    if detect_platform_ado(link, config=config):
+        return "ado"
     host, path = _urlparse_host_path(link)
     if host in allowed_hosts(config) and "/pull/" in path:
         return "github"
-    raise UnsupportedPlatform(f"unsupported link/platform: {link!r} (expected a GitHub PR URL)")
+    raise UnsupportedPlatform(
+        f"unsupported link/platform: {link!r} "
+        "(expected a GitHub PR URL or an Azure DevOps PR URL)")
 
 
 def _sanitize_seg(s: str) -> str:
@@ -290,6 +317,235 @@ def github_review_key(owner: str, repo: str, number: str | int,
     already-persisted keys byte-identical."""
     h = canonical_host(host) or "github.com"
     return f"{h}/{str(owner).lower()}/{str(repo).lower()}#{number}"
+
+
+# ---------------------------------------------------------------------------
+# Azure DevOps adapter
+# ---------------------------------------------------------------------------
+
+def _is_vsts_host(host: str) -> bool:
+    """``<org>.visualstudio.com`` — the legacy Azure DevOps host where the org
+    is the subdomain. Matched by SUFFIX (never substring): a bare ``.`` prefix
+    and a lookalike like ``notvisualstudio.com`` must not match."""
+    h = (host or "").lower()
+    return h.endswith(".visualstudio.com") and len(h) > len(".visualstudio.com")
+
+
+def ado_allowed_hosts(config: dict | None = None) -> frozenset[str]:
+    """Exact hostname allowlist for Azure DevOps, mirroring ``allowed_hosts``.
+
+    Defaults to ``dev.azure.com``. On-prem Azure DevOps Server hosts are opt-in
+    via ``config.json``'s ``ado_hosts`` list (the list REPLACES the default, so
+    keep ``dev.azure.com`` to still review there). ``*.visualstudio.com`` is NOT
+    in this set — it is matched separately by :func:`_is_vsts_host` because each
+    org is its own subdomain, so an exact set cannot enumerate them. Membership
+    tests MUST use the PARSED URL hostname and exact equality — never a
+    substring — so ``dev.azure.com.evil.example`` is refused."""
+    cfg = config if config is not None else store.read_config_quiet()
+    raw = cfg.get("ado_hosts") if isinstance(cfg, dict) else None
+    hosts: set[str] = set()
+    if isinstance(raw, (list, tuple)):
+        for entry in raw:
+            h = str(entry or "").strip().lower()
+            if "://" in h:  # tolerate a pasted URL in config (malformed -> skipped)
+                h = _urlparse_host_path(h)[0]
+            h = h.strip("/").rstrip(".")
+            if h:
+                hosts.add(h)
+    if not hosts:
+        hosts = set(store.DEFAULT_ADO_HOSTS)
+    return frozenset(hosts)
+
+
+def detect_platform_ado(link: str, *, config: dict | None = None) -> bool:
+    """True iff *link* is a recognized Azure DevOps PR URL on an allowed host.
+
+    Returns a bool (not a platform string) so :func:`detect_platform` owns the
+    canonical return values. Host check is exact-match on the PARSED hostname
+    (default-deny), plus the documented ``*.visualstudio.com`` suffix. A
+    malformed URL reads as False, never a raised ``ValueError``."""
+    if not link or not isinstance(link, str):
+        return False
+    host, path = _urlparse_host_path(link if "://" in link else "https://" + link)
+    if "/pullrequest/" not in path.lower():
+        return False
+    return host in ado_allowed_hosts(config) or _is_vsts_host(host)
+
+
+def ado_pr_ref(link: str, *, config: dict | None = None) -> tuple[str, str, str, str, str]:
+    """Parse ``(host, org, project, repo, pr_id)`` from an Azure DevOps PR URL.
+    Fails fast.
+
+    Handles both ``dev.azure.com`` (org in path) and ``*.visualstudio.com`` (org
+    in the subdomain). A scheme-less link is tolerated by retrying with
+    ``https://``; any other malformed link is rejected like a non-PR link
+    (never a ``ValueError`` out of ``urlparse``)."""
+    if not link or not isinstance(link, str):
+        raise AdapterParseError(f"not an Azure DevOps PR link: {link!r}")
+    text = link.strip()
+    host, path = _urlparse_host_path(text)
+    if not host and "://" not in text:
+        host, path = _urlparse_host_path("https://" + text)
+
+    if _is_vsts_host(host):
+        org = host.split(".", 1)[0]            # org is the subdomain
+        m = _ADO_PATH_VSTS.match(path)
+        if not m:
+            raise AdapterParseError(f"not an Azure DevOps PR link: {link!r}")
+        project, repo, pr_id = m.group(1), m.group(2), m.group(3)
+    else:
+        if host not in ado_allowed_hosts(config):
+            raise AdapterParseError(f"not an allowed Azure DevOps host: {link!r}")
+        m = _ADO_PATH_DEVAZURE.match(path)
+        if not m:
+            raise AdapterParseError(f"not an Azure DevOps PR link: {link!r}")
+        org, project, repo, pr_id = m.group(1), m.group(2), m.group(3), m.group(4)
+
+    repo = re.sub(r"\.git$", "", repo)  # tolerate a trailing .git
+    return host.lower(), org, project, repo, pr_id
+
+
+def ado_change_id(org: str, project: str, repo: str, number: str | int) -> str:
+    """Filesystem-safe, platform-namespaced change id: ``ADO-<org>-<project>-<repo>-<n>``.
+
+    The distinct ``ADO-`` prefix guarantees an Azure DevOps record can never
+    name the same on-disk file as a GitHub ``GH-`` record. Segments run through
+    :func:`_sanitize_seg` (the same ``-``-collapsing used for GitHub) so the
+    ``-`` delimiter stays unambiguous and different org/project/repo tuples
+    cannot collide."""
+    s = _sanitize_seg
+    return f"ADO-{s(org)}-{s(project)}-{s(repo)}-{number}"
+
+
+def ado_review_key(org: str, project: str, repo: str, number: str | int) -> str:
+    """Collision-free durable reviewed-index key for an Azure DevOps PR — the
+    ADO twin of :func:`github_review_key`. Never names a file, so it keeps
+    org/project/repo verbatim (lower-cased for case-insensitive identity) and
+    joins with ``/`` (a character these segments cannot contain)."""
+    return (f"{str(org).lower()}/{str(project).lower()}/"
+            f"{str(repo).lower()}#{number}")
+
+
+def extract_linked_workitem(text: str) -> str:
+    """Extract an Azure DevOps work-item reference (``AB#1234`` / ``#1234``) from
+    the PR description, preserving the ``AB`` prefix verbatim when present (it is
+    the ADO convention and marks the ref as a work item, not a GitHub issue).
+    Empty when none is present."""
+    m = ADO_WORKITEM_RE.search(text or "")
+    if not m:
+        return ""
+    prefix = (m.group(1) or "").upper()
+    return f"{prefix}#{m.group(2)}"
+
+
+def parse_ado_payload(raw: dict | str, *, link: str | None = None,
+                      config: dict | None = None) -> ReviewTarget:
+    """Normalize an Azure DevOps PR payload into the SAME ``ReviewTarget`` shape
+    the brain consumes for GitHub.
+
+    The pipeline assembles this payload from the ``azure-devops`` MCP (see
+    ``pipeline.ADO_FETCH_SPEC``): the ``repo_pull_request`` get object, a
+    ``files`` array whose per-file ``diff`` the pipeline built from the two blob
+    sides (ADO has no PR-diff endpoint), optional ``threads``, and a ``_sage``
+    context block the fetcher stamps with the parsed host/org/project/repo.
+    Tolerant of field-name variants; fails fast when there is no usable content.
+
+    GitHub→ADO field map:
+      head SHA     <- ``lastMergeSourceCommit.commitId``
+      target_branch<- ``targetRefName`` (``refs/heads/main`` -> ``main``)
+      author       <- ``createdBy.displayName`` (falls back to uniqueName)
+      change_id    <- ``ADO-<org>-<project>-<repo>-<pullRequestId>``
+    """
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise AdapterParseError(f"payload is not valid JSON: {exc}") from exc
+    if not isinstance(raw, dict):
+        raise AdapterParseError("payload must be a JSON object")
+
+    sage = raw.get("_sage") if isinstance(raw.get("_sage"), dict) else {}
+    host = str(sage.get("host") or "")
+    org = str(sage.get("org") or "")
+    project = str(sage.get("project") or "")
+    repo = str(sage.get("repo") or "")
+    number = str(raw.get("pullRequestId") or raw.get("number") or "")
+
+    # Fill any missing part from the link.
+    if not all([host, org, project, repo, number]) and link:
+        try:
+            lh, lo, lp, lr, lid = ado_pr_ref(link, config=config)
+            host = host or lh
+            org = org or lo
+            project = project or lp
+            repo = repo or lr
+            number = number or lid
+        except AdapterParseError:
+            pass
+    host = host or _ADO_HOST
+    if not all([org, project, repo, number]):
+        raise AdapterParseError(
+            "could not determine Azure DevOps org/project/repo/id from payload or link")
+
+    description = _first(raw, "description", "body", default="")
+    title = _first(raw, "title", default="") or (
+        description.splitlines()[0] if description else "")
+
+    created_by = raw.get("createdBy") if isinstance(raw.get("createdBy"), dict) else {}
+    # Prefer displayName (a handle) over uniqueName, which is usually an email —
+    # keeps the author field free of PII and matches GitHub's user.login posture.
+    author = _first(created_by, "displayName", "uniqueName", default="") if created_by else ""
+
+    revision = ""
+    lmsc = raw.get("lastMergeSourceCommit")
+    if isinstance(lmsc, dict):
+        revision = str(lmsc.get("commitId") or "")
+    if not revision:
+        revision = _first(raw, "sourceCommitId", "revision", default="")
+
+    target_branch = re.sub(r"^refs/heads/", "",
+                           str(_first(raw, "targetRefName", "target_branch", default="")))
+
+    raw_files = raw.get("files") or raw.get("changes") or []
+    files: list[dict] = []
+    for d in raw_files:
+        if not isinstance(d, dict):
+            continue
+        path = _first(d, "path", "filename", "name", default="")
+        diff = _first(d, "diff", "patch", "unifiedDiff", default="")
+        if path:
+            # ADO item paths carry a leading slash; drop it so a finding's file
+            # path reads like a repo-relative path (matches GitHub's shape).
+            files.append({"path": path.lstrip("/"), "diff": diff})
+
+    if not files and not description:
+        raise AdapterParseError("payload has no files and no description")
+
+    # ADO comment threads -> flat text list (the brain only needs the content).
+    comments: list[dict] = []
+    for t in raw.get("threads") or []:
+        if not isinstance(t, dict):
+            continue
+        for c in t.get("comments") or []:
+            if isinstance(c, dict) and c.get("content"):
+                comments.append({"body": str(c.get("content"))})
+
+    return ReviewTarget(
+        platform="ado",
+        repo_identity=f"{host}/{org}/{project}/{repo}",
+        change_id=ado_change_id(org, project, repo, number),
+        url=link or f"https://{host}/{org}/{project}/_git/{repo}/pullrequest/{number}",
+        title=title,
+        description=description,
+        linked_issue=extract_linked_workitem(description),
+        author=str(author) if author else "",
+        target_branch=target_branch,
+        revision=str(revision),
+        files=files,
+        existing_comments=comments,
+        design_discussion=[],
+        is_fix=detect_is_fix(title, description),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -433,9 +689,16 @@ def parse_github_payload(raw: dict | str, *, link: str | None = None) -> ReviewT
     )
 
 
-def normalize(link: str, raw_payload: dict | str) -> ReviewTarget:
-    """Top-level entry: detect platform, then parse. Fails fast on unsupported."""
-    platform = detect_platform(link)
+def normalize(link: str, raw_payload: dict | str, *, config: dict | None = None) -> ReviewTarget:
+    """Top-level entry: detect platform, then parse. Fails fast on unsupported.
+
+    ``config`` is threaded into ``detect_platform`` so a configured Azure DevOps
+    Server host (``ado_hosts``) or GitHub Enterprise host (``github_hosts``) is
+    recognized; it defaults to None (public github.com / dev.azure.com only),
+    keeping the one-arg call sites unchanged."""
+    platform = detect_platform(link, config=config)
+    if platform == "ado":
+        return parse_ado_payload(raw_payload, link=link, config=config)
     if platform == "github":
         return parse_github_payload(raw_payload, link=link)
     raise UnsupportedPlatform(f"unsupported platform: {platform!r}")
