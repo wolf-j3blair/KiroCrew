@@ -51,6 +51,17 @@ _READ_ONLY_BASH_PREFIXES: tuple[str, ...] = (
     "realpath",
     "basename",
     "dirname",
+    # Stdout-only filters: no flag writes a file or runs a program. `xxd` carries a
+    # rule in `_side_effect_reason`: its second operand is an output file. `rg`
+    # stays off (`--pre` runs a program); `printf` too (`-v` assigns a variable).
+    "jq",
+    "tr",
+    "nl",
+    "rev",
+    "comm",
+    "od",
+    "xxd",
+    "column",
     "git status",
     "git log",
     "git diff",
@@ -77,7 +88,8 @@ _READ_ONLY_BASH_PREFIXES: tuple[str, ...] = (
 )
 
 _READ_ONLY_PIPE_RE = re.compile(
-    r"^\s*(grep|egrep|fgrep|head|tail|wc|sort|uniq|cut|less|more|cat)\b"
+    r"^\s*(grep|egrep|fgrep|head|tail|wc|sort|uniq|cut|less|more|cat"
+    r"|jq|tr|nl|rev|comm|od|xxd|column)\b"
 )
 
 # Reject redirections and command substitutions, conservatively.
@@ -760,7 +772,7 @@ _OPTION_ACCEPT_LISTS: dict[str, _AcceptSpec] = {
 #: expressed in a table this can read.
 _ELISION_SENSITIVE_KEYS: frozenset[str] = (
     frozenset(f"git {subcommand}" for subcommand in _GIT_REF_WRITE_FLAGS)
-    | frozenset(("git remote", "uniq"))
+    | frozenset(("git remote", "uniq", "xxd"))
     | frozenset(verb for verb, spec in _OPTION_ACCEPT_LISTS.items() if spec.operands != "any")
 )
 
@@ -1090,6 +1102,14 @@ def _matched_flag(tokens: list[str], flags: tuple[str, ...]) -> str:
     return ""
 
 
+#: xxd options that take the NEXT word as their value (bare spelling only; an
+#: attached value such as `-c16` takes nothing). Listing too few only over-counts
+#: operands, which prompts.
+_XXD_VALUE_FLAGS: frozenset[str] = frozenset(
+    "-c -cols -g -groupsize -l -len -n -name -o -offset -s -seek -R".split()
+)
+
+
 def _side_effect_reason(segment: str) -> str:
     """Reason *segment* has a side effect, despite naming a read-only verb.
 
@@ -1144,7 +1164,7 @@ def _side_effect_reason(segment: str) -> str:
     # the decision there, so `hostname $EVIL` renames the host under a spelling this
     # module read as harmless.
     guarded = (
-        verb in ("git", "uniq")
+        verb in ("git", "uniq", "xxd")
         or verb in _WRITE_FLAGS
         or verb in _EXEC_FLAGS
         or verb in _OPTION_ACCEPT_LISTS
@@ -1355,6 +1375,26 @@ def _side_effect_reason(segment: str) -> str:
             return "a glob in a 'uniq' operand can expand into a second operand, which it writes"
         if len(operands) > 1:
             return "'uniq INPUT OUTPUT' writes its second operand"
+
+    # `xxd INFILE OUTFILE` writes OUTFILE (`-r` patches it). xxd stops reading
+    # options at its first operand, so every later word is the output, however
+    # it is spelled. Counting is only sound if no glob can change the count.
+    if verb == "xxd":
+        outputs, in_options, takes_value = -1, True, False
+        for tok in args:
+            if _glob_shifts_arguments(tok):
+                return "a glob in an 'xxd' argument can expand into an output file"
+            if takes_value:
+                takes_value = False
+            elif in_options and tok == "--":
+                in_options = False
+            elif in_options and tok.startswith("-") and tok != "-":
+                takes_value = tok in _XXD_VALUE_FLAGS
+            else:
+                in_options = False
+                outputs += 1
+        if outputs > 0:
+            return "'xxd INFILE OUTFILE' writes its second operand"
 
     # Tools whose read-only option surface is enumerated POSITIVELY. Deny-by-default:
     # an option has to be recognised as a read before it passes, so a spelling nobody
