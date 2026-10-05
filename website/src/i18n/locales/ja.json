@@ -7265,6 +7265,8 @@
       "copy_image": "画像をコピー",
       "copy_image_c": "画像をコピー (c)",
       "image_copied": "画像をコピーしました",
+      "image_actions": "画像の操作",
+      "copy_image_failed_use_download": "画像をコピーできませんでした — 操作メニューを開き、保存するにはダウンロードを選んでください。",
       "copy_chip_name": "{{text}} をコピー",
       "open_path_chip_name": "{{path}} を開く",
       "browse_path_chip_name": "{{path}} を参照",

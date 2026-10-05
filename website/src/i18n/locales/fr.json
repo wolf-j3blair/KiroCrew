@@ -7485,6 +7485,8 @@
       "copy_image": "Copier l'image",
       "copy_image_c": "Copier l'image (c)",
       "image_copied": "Image copiée",
+      "image_actions": "Actions sur l’image",
+      "copy_image_failed_use_download": "Impossible de copier l’image — ouvre le menu d’actions et choisis Télécharger pour l’enregistrer.",
       "copy_chip_name": "Copier {{text}}",
       "open_path_chip_name": "Ouvrir {{path}}",
       "browse_path_chip_name": "Parcourir {{path}}",

@@ -1,10 +1,14 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
-import { Check, Copy, Download, Minus, Plus, Search, X } from 'lucide-react'
+import { Check, Copy, Download, MoreHorizontal, Minus, Plus, Search, X } from 'lucide-react'
 import Clickable from '../Clickable'
 import { DOUBLE_TAP_MS, DOUBLE_TAP_SLOP, DOUBLE_TAP_ZOOM, usePinchZoom } from '../../hooks/usePinchZoom'
 import { copyImageToClipboard, imageBlobToPng } from '../../utils/clipboard'
 import { isEditableTarget } from '../../utils/editableTarget'
 import { downloadBlob } from '../../utils/download'
+import ErrorNotice from '../ErrorNotice'
+import {
+  DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem,
+} from '../ui/dropdown-menu'
 import { i18nT } from '../../i18n/t'
 import { fmtNumber } from '../../i18n/format'
 
@@ -129,11 +133,32 @@ export function Lightbox() {
   const imgRef = useRef<HTMLImageElement>(null)
   const [copyState, setCopyState] = useState<'idle' | 'ok' | 'failed'>('idle')
   const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  useEffect(() => () => { if (copyTimerRef.current != null) clearTimeout(copyTimerRef.current) }, [])
+  // Each press takes the next number; a settlement whose number is no longer
+  // current belongs to a press the user has since superseded — by pressing
+  // again, by paging to another image (the reset effect bumps it), or by the
+  // viewer closing/unmounting — and writes nothing. Without this, pressing copy
+  // on image 1 then paging right before the fetch+re-encode+write lands would
+  // run setCopyState('ok') after the reset already cleared it, announcing
+  // "Image copied" over image 2 — the clipboard holding image 1 all the while.
+  const copySeqRef = useRef(0)
+  // Clearing the flash and advancing the press number are one action, needed
+  // from the copy press, the paging/close reset, and unmount alike.
+  const resetCopyFlash = useCallback(() => {
+    copySeqRef.current += 1
+    setCopyState('idle')
+    if (copyTimerRef.current != null) { clearTimeout(copyTimerRef.current); copyTimerRef.current = null }
+  }, [])
+  useEffect(() => () => {
+    copySeqRef.current += 1
+    if (copyTimerRef.current != null) clearTimeout(copyTimerRef.current)
+  }, [])
   const copyCurrentImage = useCallback(() => {
     const cur = stateRef.current
     if (!cur) return
+    const seq = ++copySeqRef.current
     void copyLightboxImage(cur.images[cur.index]).then(ok => {
+      // Superseded by a later press, a page/close reset, or unmount.
+      if (seq !== copySeqRef.current) return
       setCopyState(ok ? 'ok' : 'failed')
       if (copyTimerRef.current != null) clearTimeout(copyTimerRef.current)
       copyTimerRef.current = setTimeout(() => { setCopyState('idle'); copyTimerRef.current = null }, LIGHTBOX_COPY_FLASH_MS)
@@ -433,8 +458,13 @@ export function Lightbox() {
   }, [abortSwipe, trackPointerUp])
   const onOverlayPointerUp = useCallback((e: React.PointerEvent<HTMLDivElement>) => endSwipe(e, false), [endSwipe])
   const onOverlayPointerCancel = useCallback((e: React.PointerEvent<HTMLDivElement>) => endSwipe(e, true), [endSwipe])
-  const onOverlayClick = useCallback(() => {
+  const onOverlayClick = useCallback((e?: React.MouseEvent<Element> | React.KeyboardEvent<Element>) => {
     if (suppressClickRef.current) { suppressClickRef.current = false; return }
+    // Close only on a real backdrop press. A click that lands on a control —
+    // or bubbles up from the actions menu, which Radix portals outside this
+    // subtree and whose focus return can re-enter here — must not dismiss the
+    // viewer, the same way the pointer handlers already ignore `closest('button')`.
+    if ((e?.target as HTMLElement | null)?.closest('button,[role="menu"],[role="menuitem"]')) return
     setState(null)
   }, [])
   useEffect(() => {
@@ -466,15 +496,16 @@ export function Lightbox() {
     swipeRef.current.engaged = false
     swipeRef.current.axis = ''
     swipeRef.current.pointerId = -1
-    // A confirmation left standing would claim the next image was copied.
-    setCopyState('idle')
-    if (copyTimerRef.current != null) { clearTimeout(copyTimerRef.current); copyTimerRef.current = null }
+    // A confirmation left standing would claim the next image was copied; the
+    // press number advances too, so a copy still in flight for this image
+    // settles into nothing rather than announcing over the next one.
+    resetCopyFlash()
     // Contacts do not survive the viewer: closing mid-pinch (or an image change
     // driven from the keyboard while fingers are down) must not leave a stale
     // pair behind for the next open to scale against. `resetZoom` clears the
     // contact map and the pinch baseline along with the zoom and pan.
     resetZoom()
-  }, [isOpen, state?.index, resetZoom])
+  }, [isOpen, state?.index, resetZoom, resetCopyFlash])
   // On any zoom change, recentre at fit and otherwise re-clamp the existing pan
   // to the new (smaller/larger) bounds — zooming out must not strand the image
   // off-screen. Runs post-layout, so offsetWidth already reflects the new box.
@@ -506,7 +537,11 @@ export function Lightbox() {
         if (cur) void downloadLightboxImage(cur.images[cur.index])
       } else if ((e.key === 'c' || e.key === 'C') && !isEditableTarget(e) && !e.metaKey && !e.ctrlKey && !e.altKey) {
         // Bare `c` only: this listener runs in capture phase, so taking Cmd/Ctrl+C
-        // would break copying selected text while the viewer is open.
+        // would break copying selected text while the viewer is open. Inert where
+        // the Clipboard API is absent, matching the hidden toolbar control — a
+        // shortcut whose only outcome is "Copy failed" is not worth preventing
+        // the browser's own `c`.
+        if (!navigator.clipboard?.write || typeof ClipboardItem === 'undefined') return
         e.preventDefault()
         copyCurrentImage()
       }
@@ -527,11 +562,22 @@ export function Lightbox() {
   if (!state) return null
   const img = state.images[state.index]
   const zoomed = zoom > LIGHTBOX_ZOOM_MIN
+  // Copy only exists where the async Clipboard API does. On a plain-HTTP LAN or
+  // remote gateway `navigator.clipboard` is undefined, so the write can only
+  // ever fail — offering a button that is guaranteed to say "Copy failed" is
+  // worse than not offering it, and Download (always present) is the path
+  // there. Hidden, not disabled: a disabled control with no explicable cause
+  // reads as broken too.
+  const canCopyImage = typeof navigator !== 'undefined'
+    && !!navigator.clipboard?.write
+    && typeof ClipboardItem !== 'undefined'
+  // The button's accessible name never carries the failure: a refused write is
+  // an error, and `errors-use-error-notice` requires it on `ErrorNotice`, not
+  // toned down into an `aria-label`/`title`. The name is the action (idle) or
+  // the success confirmation; the failure is the ErrorNotice below.
   const copyLabel = copyState === 'ok'
     ? i18nT('components.markdownRenderer.image_copied')
-    : copyState === 'failed'
-      ? i18nT('components.markdownRenderer.copy_failed')
-      : i18nT('components.markdownRenderer.copy_image')
+    : i18nT('components.markdownRenderer.copy_image')
   // 0 → untouched, 1 → full dismiss feedback. Downward pull only; the
   // rubber-banded upward direction keeps the backdrop at full strength.
   const swipeProgress = Math.min(1, Math.max(0, swipeY) / LIGHTBOX_DISMISS_TRAVEL)
@@ -668,25 +714,50 @@ export function Lightbox() {
           <Plus className="lucide-inline" aria-hidden="true" />
         </button>
         <span className="w-px h-5 bg-white/20 mx-0.5" aria-hidden="true" />
-        <button
-          data-testid="lightbox-copy-image"
-          aria-label={copyLabel}
-          title={copyState === 'idle' ? i18nT('components.markdownRenderer.copy_image_c') : copyLabel}
-          className="text-white/90 hover:text-white p-1.5 rounded-full hover:bg-white/15 transition-colors"
-          onClick={(e) => { e.stopPropagation(); copyCurrentImage() }}
-        >
-          {copyState === 'ok'
-            ? <Check className="lucide-inline text-ok" aria-hidden="true" />
-            : <Copy className="lucide-inline" aria-hidden="true" />}
-        </button>
-        <button
-          aria-label={i18nT('components.markdownRenderer.download_image')}
-          title={i18nT('components.markdownRenderer.download_d')}
-          className="text-white/90 hover:text-white p-1.5 rounded-full hover:bg-white/15 transition-colors"
-          onClick={(e) => { e.stopPropagation(); void downloadLightboxImage(img) }}
-        >
-          <Download className="lucide-inline" aria-hidden="true" />
-        </button>
+        {/* The non-zoom actions collapse into one overflow control so the pill
+            keeps its two-action cap (overflow + close) as Copy joins Download —
+            `max-two-buttons-per-row`. Close stays out of the menu: it is the
+            viewer's escape affordance and must always be one direct press. */}
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <button
+              data-testid="lightbox-actions-menu"
+              aria-label={i18nT('components.markdownRenderer.image_actions')}
+              title={i18nT('components.markdownRenderer.image_actions')}
+              className="text-white/90 hover:text-white p-1.5 rounded-full hover:bg-white/15 transition-colors outline-hidden focus-visible:ring-2 focus-visible:ring-white/60"
+              onClick={(e) => e.stopPropagation()}
+              onPointerDown={(e) => e.stopPropagation()}
+            >
+              {copyState === 'ok'
+                ? <Check className="lucide-inline text-ok" aria-hidden="true" />
+                : <MoreHorizontal className="lucide-inline" aria-hidden="true" />}
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="min-w-[180px]">
+            {canCopyImage && (
+              <DropdownMenuItem
+                data-testid="lightbox-copy-image"
+                aria-label={copyLabel}
+                onSelect={() => copyCurrentImage()}
+              >
+                {copyState === 'ok'
+                  ? <Check size={14} className="text-ok" aria-hidden="true" />
+                  : <Copy size={14} aria-hidden="true" />}
+                <span>{copyState === 'ok'
+                  ? i18nT('components.markdownRenderer.image_copied')
+                  : i18nT('components.markdownRenderer.copy_image_c')}</span>
+              </DropdownMenuItem>
+            )}
+            <DropdownMenuItem
+              data-testid="lightbox-download-image"
+              aria-label={i18nT('components.markdownRenderer.download_image')}
+              onSelect={() => { void downloadLightboxImage(img) }}
+            >
+              <Download size={14} aria-hidden="true" />
+              <span>{i18nT('components.markdownRenderer.download_d')}</span>
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
         <button
           aria-label={i18nT('components.markdownRenderer.close')}
           className="text-white/90 hover:text-white p-1.5 rounded-full hover:bg-white/15 transition-colors"
@@ -695,17 +766,36 @@ export function Lightbox() {
           <X className="lucide-inline" aria-hidden="true" />
         </button>
       </div>
-      {/* Always mounted: a live region inserted together with its text is
-          announced inconsistently, and the tick glyph is invisible to a screen reader. */}
+      {/* Success confirmation only: always mounted so the live region is not
+          inserted together with its text (announced inconsistently otherwise),
+          and the tick glyph in the menu is invisible to a screen reader. A
+          FAILURE never comes here — it is an error, so it goes through
+          `ErrorNotice` below (`errors-use-error-notice`), not a polite pill. */}
       <div
         data-testid="lightbox-copy-status"
         aria-live="polite"
-        className={copyState === 'idle'
-          ? 'sr-only'
-          : 'fixed top-safe-offset-16 right-safe-offset-4 rounded-full bg-black/60 backdrop-blur-md ring-1 ring-white/15 shadow-lg px-3 py-1 text-sm text-white/90'}
+        className={copyState === 'ok'
+          ? 'fixed top-safe-offset-16 right-safe-offset-4 rounded-full bg-black/60 backdrop-blur-md ring-1 ring-white/15 shadow-lg px-3 py-1 text-sm text-white/90'
+          : 'sr-only'}
       >
-        {copyState === 'idle' ? '' : copyLabel}
+        {copyState === 'ok' ? i18nT('components.markdownRenderer.image_copied') : ''}
       </div>
+      {/* The refused-write surface the rule requires: a real error alert with a
+          next step (Download is still here), dismissible, no agent hand-off —
+          the viewer may sit over an editable host and the hand-off would
+          navigate away from unsaved work (same decision as MarkdownTable /
+          MermaidBlock). */}
+      {copyState === 'failed' && (
+        <div className="fixed top-safe-offset-16 left-1/2 -translate-x-1/2 max-w-[min(22rem,calc(100vw-2rem))]">
+          <ErrorNotice
+            variant="inline"
+            className="rounded-full bg-black/60 backdrop-blur-md ring-1 ring-white/15 shadow-lg px-3 py-1"
+            message={i18nT('components.markdownRenderer.copy_image_failed_use_download')}
+            onDismiss={resetCopyFlash}
+            testId="lightbox-copy-error"
+          />
+        </div>
+      )}
       {/* Position in the set. Without it the swipe is invisible — nothing on
           screen says a set exists, which is how every image after the first came
           to be unreachable on touch while the keyboard could still reach them.

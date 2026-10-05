@@ -1,15 +1,19 @@
-import { render, fireEvent, act, waitFor } from '@testing-library/react'
+import { render, fireEvent, act, waitFor, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Lightbox } from '../components/MarkdownRenderer'
 
-// Copy image from the viewer's toolbar. The viewer's only way out used to be the
-// download button, so a user pasting a screenshot into a ticket had to save a file
+// Copy image from the viewer. The viewer's only way out used to be the download
+// button, so a user pasting a screenshot into a ticket had to save a file
 // first — or right-click, which the desktop shell renders no menu for.
 //
-// What matters here is that the confirmation is EARNED: every assertion below
-// reads the button's own accessible name, because a tick shown over an unchanged
-// clipboard is discovered at paste time, and the two failures a user actually hits
-// (no Clipboard API on a plain-HTTP gateway, a refused permission) are silent.
+// Copy and Download share the toolbar's overflow menu, so the pill keeps its
+// two-action cap (overflow + close) — `max-two-buttons-per-row`. What matters
+// here is that the confirmation is EARNED (a tick shown over an unchanged
+// clipboard is discovered at paste time) and that the two failures a user hits
+// (no Clipboard API on a plain-HTTP gateway, a refused permission) are not
+// silent: a refusal surfaces through `ErrorNotice`, not a toned-down pill
+// (`errors-use-error-notice`), and on an origin with no Clipboard API the copy
+// control is not offered at all — Download, always present, is the path there.
 
 const png = () => new Blob([new Uint8Array([137, 80, 78, 71])], { type: 'image/png' })
 
@@ -34,9 +38,26 @@ function stubEnv(opts: { write?: () => Promise<void>; clipboard?: boolean } = {}
   return { write }
 }
 
-const copyBtn = (c: HTMLElement) => c.querySelector('[data-testid="lightbox-copy-image"]') as HTMLElement
-const label = (c: HTMLElement) => copyBtn(c).getAttribute('aria-label')
+const menuBtn = (c: HTMLElement) => c.querySelector('[data-testid="lightbox-actions-menu"]') as HTMLElement
+// Radix opens the menu on the pointer gesture, not a bare click, in jsdom.
+const openMenu = (c: HTMLElement) => act(() => {
+  const t = menuBtn(c)
+  fireEvent.pointerDown(t, { button: 0 })
+  fireEvent.pointerUp(t)
+  fireEvent.click(t)
+})
+/** The copy item lives in a Radix menu portal, which renders to document.body. */
+const copyItem = () => document.body.querySelector('[data-testid="lightbox-copy-image"]') as HTMLElement | null
+const downloadItem = () => document.body.querySelector('[data-testid="lightbox-download-image"]') as HTMLElement | null
+// Radix selects a menu item on the pointer gesture, not a bare click.
+const selectItem = (el: HTMLElement) => act(() => {
+  fireEvent.pointerDown(el, { button: 0 })
+  fireEvent.pointerUp(el)
+  fireEvent.click(el)
+})
+const copyLabel = () => copyItem()?.getAttribute('aria-label')
 const status = (c: HTMLElement) => (c.querySelector('[data-testid="lightbox-copy-status"]') as HTMLElement)
+const errorNotice = (c: HTMLElement) => c.querySelector('[data-testid="lightbox-copy-error"]') as HTMLElement | null
 
 afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks() })
 
@@ -45,30 +66,41 @@ describe('Lightbox copy image', () => {
     const { write } = stubEnv()
     const { container } = render(<Lightbox />)
     act(() => open())
-    expect(label(container)).toBe('Copy image')
-    fireEvent.click(copyBtn(container))
-    await waitFor(() => expect(label(container)).toBe('Image copied'))
+    openMenu(container)
+    expect(copyLabel()).toBe('Copy image')
+    selectItem(copyItem()!)
+    await waitFor(() => expect(status(container).textContent).toBe('Image copied'))
     expect(write).toHaveBeenCalledOnce()
     expect(vi.mocked(fetch).mock.calls[0][0]).toBe('/api/file-raw?path=/tmp/p0.png')
   })
 
-  it('says so when the clipboard refuses, instead of flashing a tick', async () => {
+  it('surfaces a refused clipboard write through ErrorNotice, not a tick', async () => {
     stubEnv({ write: async () => { throw new DOMException('denied', 'NotAllowedError') } })
     const { container } = render(<Lightbox />)
     act(() => open())
-    fireEvent.click(copyBtn(container))
-    await waitFor(() => expect(label(container)).toBe('Copy failed'))
+    openMenu(container)
+    selectItem(copyItem()!)
+    await waitFor(() => expect(errorNotice(container)).not.toBeNull())
+    // It is a real error alert naming the next step — not a polite status pill.
+    const notice = errorNotice(container)!
+    expect(notice.getAttribute('role')).toBe('alert')
+    expect(within(notice).getByText(/actions menu and choose Download/i)).toBeTruthy()
+    // The success live region never claimed a copy.
+    expect(status(container).textContent).toBe('')
   })
 
-  it('reports failure on an origin with no Clipboard API at all', async () => {
+  it('does not offer copy on an origin with no Clipboard API at all', () => {
     stubEnv({ clipboard: false })
     const { container } = render(<Lightbox />)
     act(() => open())
-    fireEvent.click(copyBtn(container))
-    await waitFor(() => expect(label(container)).toBe('Copy failed'))
+    openMenu(container)
+    // Copy is absent (a button that could only ever fail is worse than none);
+    // Download is still here, the one path that works without a clipboard.
+    expect(copyItem()).toBeNull()
+    expect(downloadItem()).not.toBeNull()
   })
 
-  it('announces the outcome in a live region, which the tick cannot do', async () => {
+  it('announces the success in a live region, which the tick cannot do', async () => {
     stubEnv()
     const { container } = render(<Lightbox />)
     act(() => open())
@@ -76,7 +108,8 @@ describe('Lightbox copy image', () => {
     // text — a region that appears with its content is announced inconsistently.
     expect(status(container).getAttribute('aria-live')).toBe('polite')
     expect(status(container).textContent).toBe('')
-    fireEvent.click(copyBtn(container))
+    openMenu(container)
+    selectItem(copyItem()!)
     await waitFor(() => expect(status(container).textContent).toBe('Image copied'))
   })
 
@@ -88,25 +121,34 @@ describe('Lightbox copy image', () => {
     act(() => { fireEvent.keyDown(window, { key: 'c', ctrlKey: true }) })
     expect(write).not.toHaveBeenCalled()
     act(() => { fireEvent.keyDown(window, { key: 'c' }) })
-    await waitFor(() => expect(label(container)).toBe('Image copied'))
+    await waitFor(() => expect(status(container).textContent).toBe('Image copied'))
+  })
+
+  it('leaves the bare c inert on an origin with no Clipboard API', () => {
+    const { write } = stubEnv({ clipboard: false })
+    render(<Lightbox />)
+    act(() => open())
+    act(() => { fireEvent.keyDown(window, { key: 'c' }) })
+    expect(write).not.toHaveBeenCalled()
   })
 
   it('drops the confirmation when the viewer pages to another image', async () => {
     stubEnv()
     const { container } = render(<Lightbox />)
     act(() => open(3))
-    fireEvent.click(copyBtn(container))
-    await waitFor(() => expect(label(container)).toBe('Image copied'))
-    // The next image is NOT on the clipboard, so the tick must not carry over.
+    openMenu(container)
+    selectItem(copyItem()!)
+    await waitFor(() => expect(status(container).textContent).toBe('Image copied'))
+    // The next image is NOT on the clipboard, so the confirmation must not carry over.
     act(() => { fireEvent.keyDown(window, { key: 'ArrowRight' }) })
-    expect(label(container)).toBe('Copy image')
     expect(status(container).textContent).toBe('')
   })
 
-  it('leaves the download button in place, the only path without a clipboard', () => {
+  it('leaves the download action in place, the only path without a clipboard', () => {
     stubEnv({ clipboard: false })
     const { container } = render(<Lightbox />)
     act(() => open())
-    expect(container.querySelector('[aria-label="Download image"]')).not.toBeNull()
+    openMenu(container)
+    expect(downloadItem()).not.toBeNull()
   })
 })

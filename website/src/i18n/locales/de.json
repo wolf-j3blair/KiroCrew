@@ -7375,6 +7375,8 @@
       "copy_image": "Bild kopieren",
       "copy_image_c": "Bild kopieren (c)",
       "image_copied": "Bild kopiert",
+      "image_actions": "Bildaktionen",
+      "copy_image_failed_use_download": "Bild konnte nicht kopiert werden — öffne das Aktionsmenü und wähle zum Speichern Download.",
       "copy_chip_name": "{{text}} kopieren",
       "open_path_chip_name": "{{path}} öffnen",
       "browse_path_chip_name": "{{path}} durchsuchen",
