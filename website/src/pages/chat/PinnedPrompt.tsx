@@ -593,12 +593,32 @@ export default function PinnedPrompt({
   // text leaks around the overflow-visible lower lines. Collapsed cards retain
   // the existing continuous clip math below.
   const bandOwnsCardHeight = expanded || (pushUp <= 0 && peek)
+  // When the band owns the card height AND the card is being pushed out, the
+  // push translate rides the BAND, not the card. The band keeps the card's full
+  // natural height here (no clip math), so its opaque `bg-bg` fill and the
+  // `top-full` lower fade are anchored to the band's bottom edge. A transform on
+  // the card alone would slide the card up by `pushUp` while that backdrop stayed
+  // put, leaving an empty opaque strip (up to `ROW_PAD_Y + bannerH` tall) covering
+  // the transcript below for the whole push. Moving the translate onto the band
+  // carries the backdrop and fade up with the card, so no strip is left behind;
+  // the card keeps `translateY(0)` because the band already moved it. Only this
+  // state is affected: a collapsed push shrinks the band by `pushUp` through the
+  // height formula below and keeps its own card translate, and a peek never has
+  // `pushUp > 0` (see `peek`), so neither path changes.
+  const bandCarriesPush = bandOwnsCardHeight && pushUp > 0
+  const cardPushUp = bandCarriesPush ? 0 : pushUp
 
   return (
     <div
       className="relative px-4 py-1 mx-auto w-full pointer-events-none flex items-start justify-end bg-bg"
       style={{
         maxWidth: 'var(--mc-content-width, 900px)',
+        // While the band carries the push (expanded + pushed), it translates up by
+        // `pushUp` so its `bg-bg` fill and the `top-full` fade follow the card out
+        // of view together — see `bandCarriesPush`. The card's own transform is
+        // zeroed in that state so it is not moved twice.
+        transform: bandCarriesPush ? `translateY(${-pushUp}px)` : undefined,
+        willChange: bandCarriesPush ? 'transform' : undefined,
         // Clip ONLY while collapsed AND being pushed. The clip is what reveals
         // the card away as the next prompt pushes it up. Two things it must NOT
         // do: (1) clip the EXPANDED card at rest — an expanded prompt grows
@@ -645,7 +665,7 @@ export default function PinnedPrompt({
         // doing nothing. So the gesture is FORWARDED instead (see
         // `scrollTranscriptBy`) and the card keeps its pointer events.
         className="pointer-events-auto max-w-full min-w-0"
-        style={{ transform: `translateY(${-pushUp}px)`, willChange: 'transform' }}
+        style={{ transform: `translateY(${-cardPushUp}px)`, willChange: 'transform' }}
       >
         <div
           ref={boxRef}

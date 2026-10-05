@@ -114,6 +114,55 @@ describe('PinnedPrompt peek', () => {
     expect(band.style.height).toBe('')
   })
 
+  it('carries the push on the band while expanded, so the backdrop follows the card out of view', () => {
+    // While expanded the band owns the card's natural height (no clip math), so
+    // its opaque fill and lower fade are anchored to the band's bottom. If only
+    // the CARD translated up, that backdrop would stay put and leave an empty
+    // opaque strip over the transcript for the whole push. The push therefore
+    // rides the BAND, and the card's own translate is zeroed so it is not moved
+    // twice.
+    const expandedProps = {
+      text: 'expanded prompt',
+      fullText: 'expanded prompt\nwith more content',
+      images: [] as string[],
+      bodyBeyondPreview: true,
+      bannerH: 40,
+      expanded: true,
+      onToggleExpanded: () => {},
+      onJump: () => {},
+      onCollapsedHeight: () => {},
+    }
+    const { card, rerender } = renderCard(expandedProps)
+    const band = card.parentElement as HTMLElement
+
+    // At rest neither the band nor the card is translated.
+    expect(band.style.transform).toBe('')
+    expect(card.style.transform).toBe('translateY(0px)')
+
+    // Pushed: the band carries the translate, the card stays put.
+    rerender(<PinnedPrompt {...expandedProps} pushUp={12} />)
+    expect(band.style.transform).toBe('translateY(-12px)')
+    expect(card.style.transform).toBe('translateY(0px)')
+  })
+
+  it('keeps the push on the card for a collapsed banner, where the clip math already follows it', () => {
+    // A collapsed card does NOT own the band height — the band shrinks by
+    // `pushUp` through the continuous height formula and clips `overflow: hidden`,
+    // so the backdrop already follows the card. The card keeps its own translate
+    // there and the band is not translated.
+    const props = {
+      text: 'a prompt long enough that one line cannot hold it, and neither can three',
+      fullText: 'a prompt long enough that one line cannot hold it, and neither can three\nsecond paragraph\nthird paragraph',
+      images: [] as string[], bodyBeyondPreview: true, bannerH: 40, expanded: false,
+      onToggleExpanded: () => {}, onJump: () => {}, onCollapsedHeight: () => {},
+    }
+    const { card, rerender } = renderCard(props)
+    const band = card.parentElement as HTMLElement
+    rerender(<PinnedPrompt {...props} pushUp={12} />)
+    expect(card.style.transform).toBe('translateY(-12px)')
+    expect(band.style.transform).toBe('')
+  })
+
   it('opens to the preview line count once a mouse has rested on it, and closes on leave', () => {
     const { box, p } = renderCard()
     hoverAndRest(box)
