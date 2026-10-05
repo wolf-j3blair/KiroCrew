@@ -459,6 +459,8 @@ The prefs path does NOT advance the persisted `last_consolidated` marker — onl
 
 Idle detection: `_last_activity[key]` updated on every `maybe_consolidate()` call. `check_idle_sessions()` called every heartbeat tick (60s), fires history consolidation when `now - last_activity > history_idle_secs` and there are unconsolidated messages.
 
+After a restart `_last_activity` starts empty, so the first `check_idle_sessions()` seeds it once, off the event loop, from the transcripts on disk: each persistent transcript with an unconsolidated tail is tracked under its LIVE session key (`dashboard:<slot>` for a dashboard stem, the session map's key for a channel stem; a stem with no exact key is skipped), so a member-memory receipt committed before the restart is found, with the file mtime as last activity. A transcript is skipped when its header or the session map marks it incognito or temporary, and nothing is seeded when no session map is available. A seed that speaks again stops being a seed; a seed that consolidation refuses is dropped; at most `_SEEDED_PER_SWEEP` seeds are examined per sweep, re-queued in turn. Every in-process entry point treats two keys naming the same transcript file as one running consolidation (`_busy`).
+
 **Both paths write to the session's captured store.** `_consolidate` captures the
 canonical execution context before its first await and refuses incognito or
 temporary sessions before reading their transcripts. A channel thread's
