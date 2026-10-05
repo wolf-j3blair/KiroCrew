@@ -64,6 +64,8 @@ pull_request
   |                     "First Principles Review"  why it exists, advisory
   |-- security-scope-review.yml
   |                     "Security Scope Review"  which legit ops a tightening refuses, blocking
+  |-- sensitive-change-review.yml
+  |                     "Sensitive Change Review"  reasoned human approval on sensitive paths, advisory
   |-- CodeQL                                GitHub default setup, not a checked-in file
   |
   '-> pr-readiness.yml  "PR Readiness"  one commit status + one readiness: label
@@ -2743,6 +2745,33 @@ pinned to one head SHA. Nothing in that chain depends on the pull request being
 same-repo. Reading it on the fork lane is missing work, tracked in #10109, not a
 door held shut. A *transient* failure needs none of this: such a run marks its own
 check-run `[scope-floor:unsettled]`, sets no per-head floor, and clears on a re-run.
+
+## `sensitive-change-review.yml`: a reasoned human approval
+
+A PR that touches the sandbox, the command floor, the tool gate, secret
+scrubbing or redaction (`SENSITIVE_GLOBS` in
+`.github/scripts/sensitive_change_review.py`) stays red until a person with
+write access approves the current head and fills the `## Sensitive change
+review` template in the approval: what rule changed, before and after, the
+worst case, the sandbox evidence checked, no regression (tools still work,
+backward compatible, existing tests) and how to undo. Each answer needs at
+least three words. Bots, the PR author and approvals of an older commit do not
+count, and there is no waiver label. CI never runs the sandbox here; it only
+checks the approval and its text. The checker always runs from the default
+branch, so a PR cannot weaken it.
+
+A fork PR that touches a sensitive path is refused, whatever its approvals: a
+maintainer takes it over on a branch of this repository, credits the author
+with `Co-authored-by:` and `Supersedes #<n>`, and drives that PR green. On a
+same-repository PR the gate keeps one sticky comment (by `github-actions[bot]`,
+marked `<!-- sensitive-change-review -->`) listing the sensitive files and the
+template to paste into the approval. That comment is why the job holds
+`pull-requests: write`.
+
+**Advisory for now.** `PR Readiness` does not read it yet. Enrolling it waits on
+the workflow itself running from default-branch context
+([#16870](https://github.com/kirodotdev/KiroCrew/issues/16870)); until then a PR
+can edit the workflow file to skip the check.
 
 ## `pr-readiness.yml`: the aggregator
 
