@@ -4053,17 +4053,35 @@ it.
 ## Patrol
 
 Arm a loop on your own session with `monitor_start`, carrying the cycle
-instructions AND the exit condition, then end the turn. Take its bounds from
-the goal-conductor skill's `patrol_budget.py check`, and on every cycle whose
-nudge's `[patrol budget: ...]` line ends `10% or less left`, run `patrol_budget.py
-renew` and apply what it prints with `monitor_update` — a spent loop cannot be
-renewed later. A reply saying
+instructions AND the exit condition, then end the turn. **Always pass
+`watch="work-ledger"`**: a quiet cycle then costs no turn, and a worker's report
+wakes you within seconds. A loop without it must be fixed with
+`monitor_update(watch="work-ledger")` before anything else. Keep
+`interval_secs` within 300..900 seconds, whatever the round waits on. Take the
+bounds from the goal-conductor skill's `patrol_budget.py check`, and on every
+cycle whose nudge's `[patrol budget: ...]` line ends `10% or less left`, run
+`patrol_budget.py renew` and apply what it prints with `monitor_update` — a
+spent loop cannot be renewed later. A reply saying
 *requested* confirms receipt only — do not retry it in the same turn.
 Confirm activation from the gateway arm notice or `monitor_inspect` on a later turn. If arming is refused outright, say no
-loop is running and drive that one round with `wait`. Call `autonudge_stop` when
-you stop. (The loop is on a timer today. When `monitor_start` accepts a
-`watch: "work-ledger"` field, gate on that instead and the quiet cycles stop
-costing a turn.)
+loop is running and drive that one round with `wait`.
+
+**Rounds run back to back.** When a round lands, report it, then plan and
+dispatch the next round in the same turn. Do not wait for the user: the one
+Round-0 go-ahead covers every round.
+
+**Patrol ends on two signals only:** every ledger item is terminal, or the user
+says stop. Call `autonudge_stop` only then. `max_cycles` is a runaway backstop,
+not a stop signal. Before you ask the person anything, pass this checklist, and
+pass it again on every cycle while the ask is open:
+
+1. Can you pick a default? Then pick it and do not ask.
+2. Is it credentials, spend, deleting or overwriting someone's work, or
+   irreversible? If none, decide it yourself.
+3. Can you park just this item and keep the rest going? Then ask about that
+   item alone and keep patrolling the others.
+4. Never stop the loop for a question. It stays armed and picks the answer up
+   on the next cycle.
 
 Each cycle, `work_ledger_read` with `compact=true` FIRST. It returns every
 item's status columns and the derived `orphaned` and `stale` flags — small
