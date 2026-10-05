@@ -1771,6 +1771,7 @@ def _terminal_report_consumer_fields(*, exclude_attempt_local: bool = True) -> s
         "subagent_manager/terminal.py": {
             "_record_crew_log_terminal",
             "_report_terminal_impl",
+            "_report_terminal_guarded_impl",
             "notify_injection_failed_impl",
         },
         "subagent_manager/waves.py": {"_settle_digest_holds_impl"},
