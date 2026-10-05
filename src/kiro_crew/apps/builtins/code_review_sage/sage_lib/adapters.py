@@ -41,7 +41,11 @@ _ADO_PATH_VSTS = re.compile(
 # Canonical public Azure DevOps host.
 _ADO_HOST = "dev.azure.com"
 # Azure DevOps work-item reference (e.g. "AB#1234" / "#1234") linked from a PR.
-ADO_WORKITEM_RE = re.compile(r"(?:AB)?#(\d+)", re.I)
+# The leading (?<![\w#]) boundary stops a match inside tokens like "v2#3" or a
+# URL fragment; the ``AB`` prefix is captured so it can be preserved verbatim —
+# "AB#1234" is the ADO work-item convention and distinguishes it from a bare
+# "#1234" GitHub issue reference.
+ADO_WORKITEM_RE = re.compile(r"(?<![\w#])(AB)?#(\d+)", re.I)
 
 
 class AdapterError(ValueError):
@@ -424,9 +428,14 @@ def ado_review_key(org: str, project: str, repo: str, number: str | int) -> str:
 
 def extract_linked_workitem(text: str) -> str:
     """Extract an Azure DevOps work-item reference (``AB#1234`` / ``#1234``) from
-    the PR description. Empty when none is present."""
+    the PR description, preserving the ``AB`` prefix verbatim when present (it is
+    the ADO convention and marks the ref as a work item, not a GitHub issue).
+    Empty when none is present."""
     m = ADO_WORKITEM_RE.search(text or "")
-    return f"#{m.group(1)}" if m else ""
+    if not m:
+        return ""
+    prefix = (m.group(1) or "").upper()
+    return f"{prefix}#{m.group(2)}"
 
 
 def parse_ado_payload(raw: dict | str, *, link: str | None = None,
@@ -444,7 +453,7 @@ def parse_ado_payload(raw: dict | str, *, link: str | None = None,
     GitHub→ADO field map:
       head SHA     <- ``lastMergeSourceCommit.commitId``
       target_branch<- ``targetRefName`` (``refs/heads/main`` -> ``main``)
-      author       <- ``createdBy.uniqueName`` (falls back to displayName)
+      author       <- ``createdBy.displayName`` (falls back to uniqueName)
       change_id    <- ``ADO-<org>-<project>-<repo>-<pullRequestId>``
     """
     if isinstance(raw, str):
@@ -483,7 +492,9 @@ def parse_ado_payload(raw: dict | str, *, link: str | None = None,
         description.splitlines()[0] if description else "")
 
     created_by = raw.get("createdBy") if isinstance(raw.get("createdBy"), dict) else {}
-    author = _first(created_by, "uniqueName", "displayName", default="") if created_by else ""
+    # Prefer displayName (a handle) over uniqueName, which is usually an email —
+    # keeps the author field free of PII and matches GitHub's user.login posture.
+    author = _first(created_by, "displayName", "uniqueName", default="") if created_by else ""
 
     revision = ""
     lmsc = raw.get("lastMergeSourceCommit")

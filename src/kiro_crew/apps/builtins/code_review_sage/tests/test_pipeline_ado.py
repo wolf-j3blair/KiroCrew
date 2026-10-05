@@ -76,5 +76,32 @@ class TestAdoThreadPayloads(unittest.TestCase):
         self.assertEqual(len(threads), 3)
 
 
+class TestAdoDedupeMarkerContract(unittest.TestCase):
+    """The ADO poster prompt dedupes by SKIPping any thread whose content already
+    carries ``DRAFT_MARKER``. That only works if every thread body actually
+    carries the marker — these tests lock that contract so a future refactor of
+    the body builders cannot silently break idempotent re-posting."""
+
+    def _real_record(self):
+        # Bodies built through the real chokepoint (build_pending_comments ->
+        # _comment_body / build_ship_comment), which is where the marker is added.
+        record = {
+            "revision": "abc123",
+            "findings": [
+                {"severity": "red", "file": "a.py", "line": 10,
+                 "observation": "o", "consequence": "c", "suggestion": "s"},
+            ],
+            "verdict": "PASS", "red_count": 1,
+        }
+        record["pending_comments"] = pipeline.build_pending_comments(record)
+        return record
+
+    def test_marker_in_every_ado_thread_body(self):
+        threads = pipeline.build_ado_thread_payloads(self._real_record())
+        self.assertTrue(threads)
+        for t in threads:
+            self.assertIn(pipeline.DRAFT_MARKER, t["content"])
+
+
 if __name__ == "__main__":
     unittest.main()

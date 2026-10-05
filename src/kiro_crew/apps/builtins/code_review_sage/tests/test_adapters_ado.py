@@ -151,10 +151,25 @@ class TestAdoParse(unittest.TestCase):
         self.assertEqual(self.t.repo_identity, "dev.azure.com/cree-mfg/sicarbonite/sicarbonite")
 
     def test_metadata(self):
-        self.assertEqual(self.t.author, "j3blair@cree.com")
+        # displayName is preferred over the uniqueName email (no PII in records).
+        self.assertEqual(self.t.author, "Justin Blair")
         self.assertEqual(self.t.target_branch, "main")       # refs/heads stripped
         self.assertEqual(self.t.revision, "7f40548facd39779b1dc45b27769ec51a34e45d2")
-        self.assertEqual(self.t.linked_issue, "#1234")       # AB#1234 -> #1234
+        self.assertEqual(self.t.linked_issue, "AB#1234")     # AB prefix preserved
+
+    def test_author_falls_back_to_unique_name(self):
+        # When displayName is absent, uniqueName is used rather than nothing.
+        payload = dict(ADO_PAYLOAD, createdBy={"uniqueName": "someone@corp.example"})
+        self.assertEqual(A.parse_ado_payload(payload).author, "someone@corp.example")
+
+    def test_bare_hash_issue_still_extracted(self):
+        payload = dict(ADO_PAYLOAD, description="fixes #77 in the queue")
+        self.assertEqual(A.parse_ado_payload(payload).linked_issue, "#77")
+
+    def test_workitem_boundary_not_mid_token(self):
+        # A '#' glued to the end of a word (v2#3) must not read as a work item.
+        self.assertEqual(A.extract_linked_workitem("bumped v2#3 today"), "")
+        self.assertEqual(A.extract_linked_workitem("see AB#1234 and #99"), "AB#1234")
 
     def test_files_paths_stripped(self):
         self.assertEqual(len(self.t.files), 2)

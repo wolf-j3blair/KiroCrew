@@ -537,7 +537,7 @@ def build_review_followup_task(change_link: str) -> str:
     )
 
 
-def build_post_task(change_link: str) -> str:
+def build_post_task(change_link: str, *, config: dict | None = None) -> str:
     """Poster prompt: publish the driver-built, Python-REDACTED DRAFT comments for
     one change. The bodies are authoritative and already scrubbed in Python — the
     poster posts them VERBATIM and only resolves the (non-sensitive) anchor. This
@@ -554,9 +554,14 @@ def build_post_task(change_link: str) -> str:
     # (no vote), not a gh-api pending review. ADO links name a host but are not
     # GitHub PR refs, so the GitHub `_confirmed_host` fail-closed check does not
     # apply — the MCP already targets the configured org and no `--hostname`
-    # drift is possible.
+    # drift is possible. `config` is threaded into detect_platform so a
+    # configured on-prem Azure DevOps Server host (``ado_hosts``) or GHE host
+    # (``github_hosts``) is recognized here, not just on the fetch/normalize
+    # path; it defaults to the on-disk config when the caller omits it.
+    if config is None:
+        config = pipeline.store.read_config_quiet()
     try:
-        _platform = pipeline.adapters.detect_platform(change_link)
+        _platform = pipeline.adapters.detect_platform(change_link, config=config)
     except Exception:  # pragma: no cover - defensive; bare token -> github
         _platform = "github"
     if _platform == "ado":
@@ -860,9 +865,11 @@ def post_recorded(
     cur["pending_comments"] = pending
     # GitHub posts a single PENDING review, so assemble the deterministic,
     # already-redacted envelope in Python here — the poster posts it verbatim via
-    # one `gh api` call and never composes bodies.
+    # one `gh api` call and never composes bodies. Read config so a configured
+    # on-prem ADO Server / GHE host is detected (not just public hosts).
+    _cfg = pipeline.store.read_config_quiet()
     try:
-        _platform = pipeline.adapters.detect_platform(link)
+        _platform = pipeline.adapters.detect_platform(link, config=_cfg)
     except Exception:  # pragma: no cover - defensive
         _platform = "github"
     if _platform == "github":
