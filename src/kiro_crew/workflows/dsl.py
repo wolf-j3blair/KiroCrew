@@ -5,7 +5,8 @@ reaches through ``ctx``. They are pure ``asyncio`` combinators over caller-suppl
 thunks / stage callables — they hold no agent, session, or gateway logic, so this
 module sits at the BOTTOM of the layering (``dsl`` → ``context`` → ``runner``;
 GATE F1) and imports nothing heavy. The runner injects the concurrency ``limit``
-(from ``resolve_max_subagents()``); tests pass a small limit or ``None``.
+(the host's fixed workflow cap, normalized by :func:`bounded_limit`); tests pass
+a small limit or ``None``.
 
 Semantics (frozen — see ``docs/system-specs/modules/workflows.md``):
 
@@ -96,11 +97,31 @@ async def _run_thunk(thunk: Thunk) -> Any:
         return None
 
 
+#: The run-global agent concurrency a workflow gets when its host passes a
+#: non-positive limit. ``None`` is the explicit "no limit" a test asks for; a 0
+#: or a negative figure is an unresolved or misconfigured cap, and it must never
+#: mean unlimited: every concurrent ``ctx.agent()`` holds a warm worker
+#: (``agent_pool.py``), so an unbounded fan-out is that many resident processes.
+DEFAULT_AGENT_CONCURRENCY = 4
+
+
+def bounded_limit(limit: Optional[int]) -> Optional[int]:
+    """*limit* as a positive bound, :data:`DEFAULT_AGENT_CONCURRENCY` when it is
+    not one, or ``None`` (no bound) only when the caller passed ``None``."""
+    if limit is None:
+        return None
+    try:
+        value = int(limit)
+    except (TypeError, ValueError):
+        return DEFAULT_AGENT_CONCURRENCY
+    return value if value > 0 else DEFAULT_AGENT_CONCURRENCY
+
+
 async def parallel(thunks: Sequence[Thunk], *, limit: Optional[int] = None) -> list:
     """Run thunks concurrently (barrier), results in input order.
 
     A failing thunk → ``None``; this never raises (GATE A5). ``limit`` bounds
-    concurrency via a semaphore (the runner passes the subagent cap).
+    concurrency via a semaphore (the runner passes its run-global cap).
     """
     if not thunks:
         return []

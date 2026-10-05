@@ -10913,7 +10913,6 @@
         "retry_failed_error": "No se pudieron reintentar algunos subagentes fallidos"
       },
       "subagentQueued": {
-        "adaptive_cap_zero": "esperando para iniciar — los inicios están en pausa mientras este equipo tiene poca memoria o está sobrecargado; se reanudan solos cuando se recupera",
         "low_memory": "esperando para iniciar — necesita {{required}} de memoria libre, ahora hay {{available}} libres; libera memoria para continuar",
         "low_memory_no_figures": "esperando para iniciar — no hay suficiente memoria libre; libera memoria para continuar",
         "memory_pressure": "esperando para iniciar — macOS informa de presión de memoria; los inicios se reanudan solos cuando disminuya o terminen los agentes en ejecución; los inicios se abandonan cuando la presión supera el límite de espera"
@@ -17543,8 +17542,8 @@
       "degrade_reason": "Motivo de la degradación",
       "degrade_reason_tip": "Por qué la concurrencia efectiva está ahora por debajo de tu límite (retraso del bucle de eventos, poca memoria, tiempos de espera agotados, limitación del proveedor).",
       "degrade_adaptive_decrease": "Concurrencia reducida por la carga",
-      "degrade_adaptive_pause": "Nuevas ejecuciones en pausa hasta que el host se recupere",
-      "degrade_adaptive_probe": "Probando una ejecución antes de reanudar",
+      "degrade_adaptive_pause": "Nuevos arranques de backend en pausa hasta que el host se recupere",
+      "degrade_adaptive_probe": "Probando un arranque de backend antes de reanudar",
       "task_retries": "Número de intentos",
       "task_retries_tip": "Intentos ya consumidos por las tareas de Tareas en reintento. Cuenta intentos, no tareas.",
       "recovering_runs": "Backends reiniciándose",

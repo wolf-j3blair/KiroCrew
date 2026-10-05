@@ -42,6 +42,7 @@ from kiro_crew.metrics.events import WORKFLOW_RUNS, emit_counter
 
 from . import BudgetExceeded, WorkflowEvent
 from .context import DEFAULT_MAX_AGENTS_PER_RUN, AgentCounter, Budget, build_safe_globals
+from .dsl import bounded_limit
 from .dsl import parallel as _parallel
 from .dsl import pipeline as _pipeline
 from .events import EventStream
@@ -376,8 +377,11 @@ class _RunContext:
         # semaphore lives on the context, so every ``ctx.agent()`` in the run queues
         # on the same slots. Held only across the model call itself, so no thunk
         # ever holds a slot while waiting for another thunk to release one.
+        # ``None`` is the explicit "no limit"; a non-positive figure is bounded
+        # (``bounded_limit``), never read as unlimited.
+        slots = bounded_limit(concurrency)
         self._agent_slots: Optional[asyncio.Semaphore] = (
-            asyncio.Semaphore(concurrency) if (concurrency and concurrency > 0) else None
+            asyncio.Semaphore(slots) if slots is not None else None
         )
 
     @property
@@ -609,8 +613,10 @@ class WorkflowRunner:
     ``agent_fn`` is the injected agent executor (stub in tests). ``timeout_secs``
     is the B5 wall-clock ceiling — a runaway backstop, not a data-loss event: every
     terminal path returns the agent results collected so far. ``concurrency`` bounds
-    agent calls RUN-GLOBALLY (and each ``parallel``/``pipeline`` fan-out); the caller
-    passes ``resolve_max_subagents()`` in prod, ``None`` for no limit.
+    agent calls RUN-GLOBALLY (and each ``parallel``/``pipeline`` fan-out); the
+    dashboard passes its fixed workflow cap in prod, a test ``None`` for no limit. A
+    non-positive figure is bounded at ``dsl.DEFAULT_AGENT_CONCURRENCY``, never read
+    as no limit.
     """
 
     def __init__(
@@ -629,7 +635,7 @@ class WorkflowRunner:
         self._agent_fn = agent_fn
         self._timeout_secs = timeout_secs
         self._max_agents = max_agents_per_run
-        self._concurrency = concurrency
+        self._concurrency = bounded_limit(concurrency)
         # B10 audit sink (default = real SEL) + native ports (default = none wired).
         self._audit = _guarded_audit(audit or _default_audit)
         self._ports = ports or {}

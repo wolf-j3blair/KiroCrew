@@ -10913,7 +10913,6 @@
         "retry_failed_error": "Impossibile riprovare alcuni subagenti non riusciti"
       },
       "subagentQueued": {
-        "adaptive_cap_zero": "in attesa di avvio — gli avvii sono in pausa finché questo computer ha poca memoria o è sovraccarico; riprendono da soli quando si ristabilisce",
         "low_memory": "in attesa di avvio — richiede {{required}} di memoria libera, ora {{available}} liberi; libera memoria per continuare",
         "low_memory_no_figures": "in attesa di avvio — memoria libera insufficiente; libera memoria per continuare",
         "memory_pressure": "in attesa di avvio — macOS segnala pressione sulla memoria; gli avvii riprendono da soli quando si allenta o quando terminano gli agenti in esecuzione; gli avvii si interrompono quando la pressione supera il limite di attesa"
@@ -17543,8 +17542,8 @@
       "degrade_reason": "Motivo della riduzione",
       "degrade_reason_tip": "Perché la concorrenza effettiva è ora sotto il tuo limite (ritardo del ciclo eventi, memoria scarsa, timeout, limitazione del provider).",
       "degrade_adaptive_decrease": "Concorrenza ridotta per il carico",
-      "degrade_adaptive_pause": "Nuove esecuzioni in pausa fino al ripristino dell’host",
-      "degrade_adaptive_probe": "Prova di un’esecuzione prima di riprendere",
+      "degrade_adaptive_pause": "Nuovi avvii del backend in pausa fino al ripristino dell’host",
+      "degrade_adaptive_probe": "Prova di un avvio del backend prima di riprendere",
       "task_retries": "Numero di tentativi",
       "task_retries_tip": "Tentativi già consumati dalle attività elencate in Attività in nuovo tentativo. Conta i tentativi, non le attività.",
       "recovering_runs": "Backend in riavvio",

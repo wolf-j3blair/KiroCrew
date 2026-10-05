@@ -10913,7 +10913,6 @@
         "retry_failed_error": "Impossible de réessayer certains sous-agents en échec"
       },
       "subagentQueued": {
-        "adaptive_cap_zero": "en attente de démarrage — les démarrages sont suspendus tant que cet ordinateur manque de mémoire ou est surchargé ; ils reprennent d’eux-mêmes une fois la situation rétablie",
         "low_memory": "en attente de démarrage — nécessite {{required}} de mémoire libre, {{available}} libres actuellement ; libère de la mémoire pour continuer",
         "low_memory_no_figures": "en attente de démarrage — mémoire libre insuffisante ; libère de la mémoire pour continuer",
         "memory_pressure": "en attente de démarrage — macOS signale une pression mémoire ; les démarrages reprennent d’eux-mêmes dès qu’elle diminue ou que les agents en cours se terminent ; les démarrages abandonnent dès que la pression dépasse la limite d’attente"
@@ -17543,8 +17542,8 @@
       "degrade_reason": "Motif de dégradation",
       "degrade_reason_tip": "Pourquoi la concurrence effective est actuellement inférieure à ta limite (latence de la boucle d’événements, mémoire faible, délais dépassés, limitation du fournisseur).",
       "degrade_adaptive_decrease": "Concurrence réduite sous la charge",
-      "degrade_adaptive_pause": "Nouvelles exécutions en pause jusqu’au rétablissement de l’hôte",
-      "degrade_adaptive_probe": "Test d’une exécution avant la reprise",
+      "degrade_adaptive_pause": "Nouveaux démarrages du backend en pause jusqu’au rétablissement de l’hôte",
+      "degrade_adaptive_probe": "Test d’un démarrage du backend avant la reprise",
       "task_retries": "Nombre de tentatives",
       "task_retries_tip": "Tentatives déjà consommées par les tâches listées sous Tâches en nouvelle tentative. On compte des tentatives, pas des tâches.",
       "recovering_runs": "Backends en redémarrage",

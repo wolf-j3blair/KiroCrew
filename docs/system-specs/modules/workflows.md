@@ -1175,7 +1175,11 @@ sizing it from `resolve_max_subagents()`: because the pool keeps a separate
 sub-pool per identity with an aggregate bound of `(max_identities + 1) *
 max_workers`, an auto-sized cap would raise worst-case resident `kiro-cli` workers
 from 9x4 = 36 to 9x`subagent_auto_max` and OOM the gateway on a large host. The
-run **ceiling** is unaffected by that and is config-driven.
+run **ceiling** is unaffected by that and is config-driven. `WorkflowRunner`
+normalizes the figure through `dsl.bounded_limit`: `None` is the explicit "no
+limit" a test asks for, and a 0 or negative figure is bounded at
+`dsl.DEFAULT_AGENT_CONCURRENCY` (4), never read as unlimited
+(`test_subagent_memory_bounds_concurrency.py::test_a_non_positive_workflow_concurrency_is_bounded`).
 
 ### HTTP surface
 

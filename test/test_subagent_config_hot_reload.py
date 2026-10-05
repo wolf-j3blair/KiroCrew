@@ -1,7 +1,7 @@
 """SubagentManager live config: every constructor-captured limit follows config.json.
 
-``SubagentManager`` copies nine ``agent.*`` limits (plus ``session.pool_size``
-through the auto-sized cap) at construction. ``reconfigure`` re-derives every
+``SubagentManager`` copies nine ``agent.*`` limits (the cap among them, from
+the explicit pin or the ``subagent_auto_max`` ceiling) at construction. ``reconfigure`` re-derives every
 copy from a reloaded config, and the manager subscribes itself on the process
 watcher so a write from ANY writer reaches it. These tests pin: each derived
 field, the ``0`` timeout / stall sentinels, that a raised cap admits a queued
@@ -148,14 +148,17 @@ class TestReconfigureDerivesEveryField:
         mgr.reconfigure.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_pool_size_change_recomputes_the_cap(self) -> None:
-        """``session.pool_size`` is an input to the auto-sized cap."""
+    async def test_pool_size_no_longer_reaches_the_manager(self) -> None:
+        """``session.pool_size`` no longer sizes the cap (the spawn floor reads
+        memory per start), so it is not a path this manager subscribes to."""
         mgr = _mgr(max_concurrent=4)
+        assert "session.pool_size" not in SubagentManager.LIVE_CONFIG_PATHS
         fresh = KiroCrewConfig()
         fresh.session.pool_size = 5
-        with patch("kiro_crew.subagent.resolve_max_subagents", return_value=6):
+        with patch("kiro_crew.subagent.resolve_max_subagents", return_value=6) as resolve:
             await _dispatch(fresh, "session.pool_size")
-        assert mgr.max_concurrent == 6
+        resolve.assert_not_called()
+        assert mgr.max_concurrent == 4
 
     @pytest.mark.asyncio
     async def test_a_non_sizing_change_skips_the_resolve_thread_hop(self) -> None:

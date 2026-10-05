@@ -10766,7 +10766,6 @@
         "retry_failed_error": "Einige fehlgeschlagene Subagents konnten nicht wiederholt werden"
       },
       "subagentQueued": {
-        "adaptive_cap_zero": "wartet auf den Start — Starts sind pausiert, solange dieser Computer wenig Speicher hat oder überlastet ist; sie laufen von selbst weiter, sobald er sich erholt",
         "low_memory": "wartet auf den Start — benötigt {{required}} freien Speicher, aktuell {{available}} frei; gib Speicher frei, um fortzufahren",
         "low_memory_no_figures": "wartet auf den Start — nicht genug freier Speicher; gib Speicher frei, um fortzufahren",
         "memory_pressure": "wartet auf den Start — macOS meldet Speicherdruck; die Starts laufen von selbst weiter, sobald er nachlässt oder die laufenden Agenten fertig sind; Starts geben auf, sobald der Druck länger als das Wartelimit anhält"
@@ -17292,8 +17291,8 @@
       "degrade_reason": "Drosselungsgrund",
       "degrade_reason_tip": "Warum die wirksame Parallelität gerade unter deinem Limit liegt (Event-Loop-Verzögerung, wenig Speicher, Zeitüberschreitungen, Drosselung durch den Anbieter).",
       "degrade_adaptive_decrease": "Parallelität wegen Last gesenkt",
-      "degrade_adaptive_pause": "Neue Läufe angehalten, bis sich der Host erholt",
-      "degrade_adaptive_probe": "Ein Lauf wird getestet, bevor es weitergeht",
+      "degrade_adaptive_pause": "Neue Backend-Starts angehalten, bis sich der Host erholt",
+      "degrade_adaptive_probe": "Ein Backend-Start wird getestet, bevor es weitergeht",
       "task_retries": "Wiederholungsversuche",
       "task_retries_tip": "Versuche, die die Aufgaben unter Aufgaben in Wiederholung schon verbraucht haben. Gezählt werden Versuche, nicht Aufgaben.",
       "recovering_runs": "Backends starten neu",

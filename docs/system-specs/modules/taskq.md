@@ -1622,8 +1622,8 @@ disabling it is observed by the next retry. Setting it false restores the in-mem
 `_queue` dispatch (`tasks.db` stays in place, unread). Setting
 `agent.adaptive_concurrency=false` stops the controller moving any cap;
 `agent.adaptive_concurrency_mode="fixed"` pins both actuators as plain semaphores
-(the execution cap at `min(agent.adaptive_initial, max_subagents)`, the daemon's
-spawn gate at `mcp_gateway.spawn_concurrency_initial`).
+(the execution cap at its ceiling, `max_subagents` or `subagent_auto_max`, the
+daemon's spawn gate at `mcp_gateway.spawn_concurrency_initial`).
 
 **What the three flags do NOT restore.** An operator who sets all three does not
 get pre-queue behaviour, because these are new bounds and new results that no
@@ -1633,7 +1633,8 @@ flag reverts:
   `mcp_gateway.spawn_concurrency_initial` (4 by default). Before this change a
   private/exclusive backend was bounded by nothing, so this is a NEW ceiling that
   the fixed mode pins rather than removes. `mcp_gateway.spawn_concurrency_max`
-  raises it; nothing returns it to unbounded.
+  (raised to the subagent ceiling when that is higher) bounds how far the
+  controller raises it; nothing returns it to unbounded.
 - `agent.session_start_concurrency` bounds concurrent `session/new` calls, and
   `agent.interactive_command_policy` decides what happens to a tool call that is
   waiting on a human at a terminal. Both are new, both are outside the set above,
