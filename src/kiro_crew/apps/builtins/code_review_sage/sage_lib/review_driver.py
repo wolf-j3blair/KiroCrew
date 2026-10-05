@@ -550,6 +550,39 @@ def build_post_task(change_link: str) -> str:
         "and already redacted in Python — post each one VERBATIM. Do NOT compose, edit, "
         "summarize, truncate, translate, or add to any body.\n"
     )
+    # Azure DevOps posts through the azure-devops MCP as draft comment THREADS
+    # (no vote), not a gh-api pending review. ADO links name a host but are not
+    # GitHub PR refs, so the GitHub `_confirmed_host` fail-closed check does not
+    # apply — the MCP already targets the configured org and no `--hostname`
+    # drift is possible.
+    try:
+        _platform = pipeline.adapters.detect_platform(change_link)
+    except Exception:  # pragma: no cover - defensive; bare token -> github
+        _platform = "github"
+    if _platform == "ado":
+        return (
+            _preamble + "  1. Read data/results/<id>.json and take its "
+            "`ado_thread_payloads` array (each entry: optional threadContext, "
+            "status, content). It was assembled AND redacted in Python — use each "
+            "`content` EXACTLY as given; do NOT rebuild it. Parse "
+            "org/project/repo/pullRequestId from the PR URL.\n"
+            "  2. Dedupe against existing sage drafts: list threads with "
+            "`repo_pull_request_thread` (list) and SKIP creating any thread whose "
+            "first comment content already contains the exact marker "
+            "`[code-review-sage]` at the same file+line (or PR-level) — this makes "
+            "re-posting idempotent. NEVER edit or delete a human's thread.\n"
+            "  3. For EACH remaining payload, create ONE thread via "
+            "`repo_pull_request_thread_write` (create) with its threadContext (omit "
+            "for a PR-level thread), status 'active', and the comment content "
+            "VERBATIM. DO NOT set a reviewer vote, DO NOT approve or complete the "
+            "PR, DO NOT call any vote/status-write endpoint — a HUMAN votes. These "
+            "threads are the ADO draft-only equivalent.\n"
+            "  4. Update data/results/<id>.json: set posted_comments = the number "
+            "of threads you created; set design_comment_posted = true if you "
+            "created the PR-level (no-threadContext) ship thread. Do NOT modify "
+            "findings, phase1, pending_comments, or ado_thread_payloads.\n"
+            "Do NOT spawn further subagents. Execute; do not ask questions."
+        )
     # FAIL CLOSED on host resolution — the host decides which GitHub instance
     # every `gh api` call in this prompt targets. `_confirmed_host` raises when
     # the link names a host that does not revalidate (a GHE host removed from
@@ -855,6 +888,12 @@ def post_recorded(
                 "expected_units": 0,
                 "posted_keys": list(already),
             }
+    elif _platform == "ado":
+        # Azure DevOps has no single pending-review object: assemble the DRAFT
+        # thread set (one PR-level ship thread + one per anchored finding, none
+        # with a vote). Like GitHub, bodies are already redacted; the poster
+        # creates each thread verbatim via repo_pull_request_thread_write.
+        cur["ado_thread_payloads"] = pipeline.build_ado_thread_payloads(cur)
     # Clear the delivery fields before the record goes to the poster. They are
     # what the poster writes back as its ONLY evidence of delivery, so a value
     # left over from an earlier attempt is indistinguishable from one it just
@@ -932,12 +971,15 @@ def post_recorded(
     # the body instead of becoming its own inline comment — so `len(pending)`
     # over-counts and a complete delivery read as short. `posted_keys` then went
     # unwritten and the next post duplicated comments already on the pull request.
-    # Non-GitHub platforms have no payload; there the finding count is the unit count.
-    expected_units = (
-        pipeline.review_payload_units(cur["github_review_payload"])
-        if _platform == "github"
-        else len(pending)
-    )
+    # Non-GitHub platforms have no GitHub payload. Azure DevOps delivers one
+    # thread per unit (ship thread + one per anchored finding), so the assembled
+    # thread list IS the unit count; any other platform falls back to findings.
+    if _platform == "github":
+        expected_units = pipeline.review_payload_units(cur["github_review_payload"])
+    elif _platform == "ado":
+        expected_units = len(cur.get("ado_thread_payloads") or [])
+    else:
+        expected_units = len(pending)
     # `confirm` is a seam, not a bypass: it defaults to the real read-back and
     # exists so tests about WHICH comments a rebuilt draft carries do not each
     # need a live pull request.

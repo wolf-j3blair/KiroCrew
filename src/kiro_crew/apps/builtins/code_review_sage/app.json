@@ -2,20 +2,21 @@
   "name": "code-review-sage",
   "version": "0.9.3",
   "displayName": "Code Review Sage",
-  "description": "Deep-reviews GitHub pull requests and tells you which changes actually deserve your attention. Every changed file is reviewed in its own isolated agent session, weighted by how much blast radius it carries, and rolled up into a prioritized Focus Report. Findings are staged as a draft GitHub review that stays unpublished until you submit it, and the reviewer keeps learning your repository's real standards from shipped fixes and past review comments.",
+  "description": "Deep-reviews GitHub and Azure DevOps pull requests and tells you which changes actually deserve your attention. Every changed file is reviewed in its own isolated agent session, weighted by how much blast radius it carries, and rolled up into a prioritized Focus Report. Findings are staged as a draft review (a GitHub pending review, or Azure DevOps comment threads with no vote) that stays unpublished until you submit it, and the reviewer keeps learning your repository's real standards from shipped fixes and past review comments.",
   "author": "kirocrew",
   "tags": [
     "code-review",
     "learning",
     "developer-tools",
-    "github"
+    "github",
+    "azure-devops"
   ],
   "highlights": [
     "Focus Report ranks changes by blast radius so the risky files get read first",
     "One isolated agent session per change, so findings never bleed between files",
     "Reviews are read in the app — nothing is posted to your pull request unless you ask",
     "Learns per-repository from shipped fixes, review comments, and design discussions",
-    "Reviews GitHub pull requests; needs an authenticated `gh` CLI on the gateway host"
+    "Reviews GitHub PRs (authenticated `gh` CLI) and Azure DevOps PRs (via the azure-devops MCP)"
   ],
   "defaultEnabled": false,
   "platform": {
@@ -55,10 +56,10 @@
   "heroImageDetail": "/app-assets/code-review-sage/hero-detail-light.svg",
   "heroImageDetailDark": "/app-assets/code-review-sage/hero-detail-dark.svg",
   "useCases": [
-    "Review one or many GitHub pull requests by risk, inspect focused findings, and stage only the comments worth publishing."
+    "Review one or many GitHub or Azure DevOps pull requests by risk, inspect focused findings, and stage only the comments worth publishing."
   ],
   "configuration": [
-    "Install and authenticate the gh CLI on the gateway host, add a repository, then choose the review model, reasoning effort, and concurrency in Settings."
+    "For GitHub: install and authenticate the gh CLI on the gateway host. For Azure DevOps: configure the azure-devops MCP (and add on-prem Azure DevOps Server hosts to `ado_hosts` in config.json). Add a repository, then choose the review model, reasoning effort, and concurrency in Settings."
   ],
   "screenshots": [
     "/app-assets/code-review-sage/screenshot-main.png"

@@ -257,6 +257,19 @@ POSTING_SPECS = {
         "anchor": "a comments[] entry {path, line, side:'RIGHT'} against commit_id=<head SHA>",
         "top_anchor": "the review `body` field (a general summary on the pending review)",
     },
+    # Azure DevOps has no "pending review" primitive. The draft-only invariant is
+    # instead a set of comment THREADS with NO vote set (a human votes). Each
+    # thread is one repo_pull_request_thread_write(create) call via the
+    # azure-devops MCP. NEVER call the set-vote endpoint.
+    "ado": {
+        "tool": "one `repo_pull_request_thread_write` (create) call per finding via "
+                "the azure-devops MCP, status 'active', and NEVER set a vote "
+                "(a human approves/waits) — this is the ADO draft-only equivalent",
+        "anchor": "threadContext {filePath:'/<path>', rightFileStart:{line,offset:1}, "
+                  "rightFileEnd:{line,offset:1}} on the finding's file+line",
+        "top_anchor": "one thread with NO threadContext (a PR-level comment) carrying "
+                      "the ship-readiness summary",
+    },
 }
 
 
@@ -279,16 +292,41 @@ FETCH_SPECS = {
         'the form {...pull, "files":[{filename, patch}], "comments":[...]} and pass '
         "THAT object as the payload"
     ),
+    # Azure DevOps: there is NO PR-diff endpoint. `includeChangedFiles=true`
+    # returns changeEntries carrying only {path, changeType, blob SHAs}, so the
+    # per-file unified diff must be ASSEMBLED from the two blob sides.
+    "ado": (
+        "use the `azure-devops` MCP to fetch the PR (the gateway already holds "
+        "the ADO credential — do NOT shell out to a CLI). Parse "
+        "org/project/repo/pullRequestId from the URL, then:\n"
+        "  1. `repo_pull_request` action=get with includeChangedFiles=true — gives "
+        "PR metadata (lastMergeSourceCommit.commitId = head, lastMergeTargetCommit."
+        "commitId = base, targetRefName, createdBy, title, description) AND "
+        "changedFilesSummary.changeEntries[] (each: item.path, changeType "
+        "[1=add,2=edit,16=delete], item.objectId=after-blob, item.originalObjectId="
+        "before-blob).\n"
+        "  2. For EACH changed file, build a unified diff yourself: `repo_file` "
+        "action=get_content at version=<base commitId> (skip for an add) and at "
+        "version=<head commitId> (skip for a delete), versionType=Commit, then "
+        "difflib.unified_diff(before, after). ADO has no ready-made patch.\n"
+        "  3. `repo_pull_request_thread` (list) for existing comment threads.\n"
+        'Merge into ONE JSON object: {...pr, "_sage":{host,org,project,repo}, '
+        '"files":[{path, diff}], "threads":[...]} and pass THAT as the payload'
+    ),
 }
 
 
 def fetch_spec(platform: str, host: str = "github.com") -> str:
-    """FETCH instruction for a platform (GitHub is the only platform).
+    """FETCH instruction for a platform (``github`` or ``ado``).
 
     For a GitHub Enterprise host the instruction routes every ``gh api`` call to
     that instance's API via ``--hostname`` — the host has already passed the
-    adapters' parsed-hostname allowlist, so it is safe to interpolate."""
+    adapters' parsed-hostname allowlist, so it is safe to interpolate. Azure
+    DevOps goes through the MCP (which already targets the configured org), so
+    no host interpolation is added there."""
     spec = FETCH_SPECS.get(platform, FETCH_SPECS["github"])
+    if platform == "ado":
+        return spec
     h = adapters.canonical_host(host)
     if h:
         # ALWAYS name the host — including github.com — so the worker's gh
@@ -337,7 +375,9 @@ def build_comment_payload(finding: dict, change_id: str, revision: str,
     """Build a DRAFT-only comment payload from a finding. ``publish`` is ALWAYS
     False (draft-only safety). For GitHub this is the single-finding anchor shape
     ({path, line, side} against the head commit SHA); the full pending review is
-    assembled by ``build_github_review_payload``."""
+    assembled by ``build_github_review_payload``. For Azure DevOps it is the
+    single-thread anchor shape (threadContext against the head), assembled into
+    the full thread set by ``build_ado_thread_payloads``."""
     body = _comment_body(finding)
     if platform == "github":
         line = int(finding.get("line", 0) or 0)
@@ -348,6 +388,14 @@ def build_comment_payload(finding: dict, change_id: str, revision: str,
             "commit_id": revision,
             "content": body,
             "publish": False,  # NON-NEGOTIABLE — a human submits the pending review.
+        }
+    if platform == "ado":
+        line = int(finding.get("line", 0) or 0)
+        return {
+            "path": finding.get("file", ""),
+            "line": line,
+            "content": body,
+            "publish": False,  # NON-NEGOTIABLE — no vote; a human approves/waits.
         }
     raise ValueError(f"unsupported posting platform: {platform!r}")
 
@@ -507,6 +555,62 @@ def build_github_review_payload(record: dict) -> dict:
     payload["commit_id"] = commit_id         # anchors comments to the reviewed head
     # NOTE: intentionally NO "event" key -> the review stays PENDING (unsubmitted).
     return payload
+
+
+def build_ado_thread_payloads(record: dict) -> list[dict]:
+    """Assemble the DRAFT comment threads for an Azure DevOps PR from a record's
+    ``pending_comments`` — the ADO twin of ``build_github_review_payload``.
+
+    Azure DevOps has no single "pending review" object, so instead of ONE review
+    with inline comments this returns N threads: one PR-level ship-readiness
+    thread (no ``threadContext``) plus one line-anchored thread per finding. The
+    draft-only invariant holds because NONE of these set a reviewer vote — a
+    human approves/waits. Each dict is one ``repo_pull_request_thread_write``
+    (create) call.
+
+    Bodies are taken VERBATIM from ``build_pending_comments`` (already redacted
+    at the deterministic chokepoint); ``_redact`` is re-run here (idempotent) so
+    this external-egress point is self-evidently safe. A finding lacking a usable
+    ``{path, line}`` anchor is folded into a PR-level thread rather than dropped —
+    ADO, like GitHub, rejects a comment anchored outside the diff."""
+    pending = record.get("pending_comments") or []
+    threads: list[dict] = []
+    design_body = ""
+    finding_threads: list[dict] = []
+    for e in pending:
+        text = _redact(e.get("body", "") or "")
+        if e.get("kind") == "design":
+            if text:
+                design_body = text
+            continue
+        path = _redact(str(e.get("file", "") or ""))
+        line = int(e.get("line", 0) or 0)
+        if path and line > 0:
+            finding_threads.append({
+                "threadContext": {
+                    # ADO item paths are repo-absolute (leading slash).
+                    "filePath": path if path.startswith("/") else "/" + path,
+                    "rightFileStart": {"line": line, "offset": 1},
+                    "rightFileEnd": {"line": line, "offset": 1},
+                },
+                "status": "active",
+                "content": text,
+                "publish": False,  # NON-NEGOTIABLE — no vote set.
+            })
+        elif text:
+            # Unanchored finding -> PR-level thread (same fold as GitHub's body).
+            finding_threads.append({
+                "threadContext": None, "status": "active",
+                "content": text, "publish": False,
+            })
+    # Ship-readiness summary leads, exactly as it leads the GitHub review body.
+    if design_body:
+        threads.append({
+            "threadContext": None, "status": "active",
+            "content": design_body, "publish": False,
+        })
+    threads.extend(finding_threads)
+    return threads
 
 
 # ---------------------------------------------------------------------------
